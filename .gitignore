@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+cache/
+broadcast/
+contracts/out/
+contracts/cache/
+.env
+.env.local
+contracts/lib/*
+!contracts/lib/openzeppelin-contracts/
+!contracts/lib/openzeppelin-contracts/**
+echidna-corpus/
+coverage/
+*.log

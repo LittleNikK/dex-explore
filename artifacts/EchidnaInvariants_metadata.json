@@ -1,0 +1,60 @@
+{
+	"compiler": {
+		"version": "0.8.30+commit.73712a01"
+	},
+	"language": "Solidity",
+	"output": {
+		"abi": [
+			{
+				"inputs": [],
+				"name": "echidna_k_is_positive",
+				"outputs": [
+					{
+						"internalType": "bool",
+						"name": "",
+						"type": "bool"
+					}
+				],
+				"stateMutability": "view",
+				"type": "function"
+			}
+		],
+		"devdoc": {
+			"kind": "dev",
+			"methods": {},
+			"version": 1
+		},
+		"userdoc": {
+			"kind": "user",
+			"methods": {},
+			"notice": "Minimal Echidna invariant harness. Extend with real pool/router         invariants (e.g. k never decreases on a fee-bearing swap, liquidity         accounting never underflows) once contracts are wired in.",
+			"version": 1
+		}
+	},
+	"settings": {
+		"compilationTarget": {
+			"contracts/test/echidna/EchidnaInvariants.sol": "EchidnaInvariants"
+		},
+		"evmVersion": "prague",
+		"libraries": {},
+		"metadata": {
+			"bytecodeHash": "ipfs"
+		},
+		"optimizer": {
+			"enabled": false,
+			"runs": 200
+		},
+		"remappings": []
+	},
+	"sources": {
+		"contracts/test/echidna/EchidnaInvariants.sol": {
+			"keccak256": "0xde78cced8cc06a142e725b07f1a9fea5dd5d7b70b2837ff0b9c655a3f5cdb93b",
+			"license": "MIT",
+			"urls": [
+				"bzz-raw://d2c12ed0c131ffc0603dc3a3a2328fd5d40251b7df7e07b0614c090f60e45458",
+				"dweb:/ipfs/QmYQaU6ZCCn94qtN3umiYFn8U7TYoSTpF4GYtz8jEamjNs"
+			]
+		}
+	},
+	"version": 1
+}
