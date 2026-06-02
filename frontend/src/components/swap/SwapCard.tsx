@@ -21,7 +21,7 @@ export default function SwapCard() {
   const publicClient = usePublicClient();
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { switchChain, isPending: isSwitching } = useSwitchChain();
+  const { switchChainAsync, isPending: isSwitching } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
 
   const inputToken = getToken(tokenIn);
@@ -93,6 +93,19 @@ export default function SwapCard() {
     await publicClient.waitForTransactionReceipt({ hash: approveHash });
   }
 
+  async function ensureMstChain() {
+    if (chainId === mstChain.id) return true;
+
+    setStatus("Switch MetaMask to MST Testnet...");
+    try {
+      await switchChainAsync({ chainId: mstChain.id });
+      return true;
+    } catch {
+      setStatus("Transaction blocked until MetaMask is on MST Testnet.");
+      return false;
+    }
+  }
+
   async function handleSwap() {
     setStatus(null);
     setTxHash(null);
@@ -103,8 +116,7 @@ export default function SwapCard() {
       return;
     }
 
-    if (chainId !== mstChain.id) {
-      switchChain({ chainId: mstChain.id });
+    if (!(await ensureMstChain())) {
       return;
     }
 

@@ -350,23 +350,47 @@ All **5/5 test suites** compile cleanly and pass with 100% success!
 
 ## 🚀 Running the Full Stack Locally
 
-To launch the complete integrated DApp locally (both the premium motion frontend and the event-listening API backend):
+To launch the complete integrated DApp locally, you can choose either the single-command Docker Orchestration or the manual Developer mode.
 
-### 1. Start the Backend API & Event Listener Service
-Open a new terminal and execute:
+### Option A: The Automated Docker Way (Recommended)
+This command spins up the databases, Redis cache, IPFS, local Graph Node, the Event-Listening API, and the Frontend in a single, isolated setup:
+```bash
+docker compose up --build
+```
+- **Frontend URL**: `http://localhost:3000`
+- **Backend URL**: `http://localhost:3001`
+
+---
+
+### Option B: The Developer Manual Way
+If you prefer running individual processes for hot-reloading and development feedback:
+
+#### 1. Start Database & Redis Backing Services
+Ensure Docker is active, then spin up the infrastructure container:
+```bash
+docker compose up -d postgres graph-postgres redis ipfs graph-node
+```
+
+#### 2. Start the Backend API & Event Listener
+Prisma client generation and DB setup is required:
 ```bash
 cd backend
+npm install
+npm run prisma:generate
 npm run dev
 ```
-* **Host**: `http://localhost:3001`
-* **Logs**: Actively tracks transaction requests, smart order routing graphs, and ws-subscribers.
+- **Host**: `http://localhost:3001`
+- **Logs**: Monitors live on-chain event streams and updates token swap graph indices.
 
-### 2. Start the Frontend DApp Web Server
-Open a second terminal and execute:
+#### 3. Start the Frontend Vite Server
+Launch the React trading terminal interface:
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
-* **Host**: `http://localhost:3000`
-* **Features**: Live Metamask handshakes, stateless `QuoterV2` pricing simulations, recipient gas fee calculator, and multi-token balance wallet explorers under the vibrant GTA 6 styled neon motion backdrop!
+- **Host**: `http://localhost:3000`
+- **Features**: Real-time wallet handshakes, concentrated swap paths, fee estimations, and dynamic theme visual layers.
 
+#   d e x - 6 2  
+ 

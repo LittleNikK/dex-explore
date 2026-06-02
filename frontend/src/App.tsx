@@ -1,65 +1,80 @@
-import { Suspense, useState } from "react";
+import { Suspense, useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
 import { wagmiConfig } from "./config/wagmi";
-import ParticleBackground from "./components/ui/ParticleBackground";
+import { BackgroundCanvas } from "./components/swap/BackgroundCanvas";
 
 // Import custom pages
-import LandingPage from "./pages/LandingPage";
 import SwapPage from "./pages/SwapPage";
 import TrendingPage from "./pages/TrendingPage";
 import TransferPage from "./pages/TransferPage";
 import ExplorePage from "./pages/ExplorePage";
-import AboutPage from "./pages/AboutPage";
-import ContactPage from "./pages/ContactPage";
 import LiquidityPage from "./pages/LiquidityPage";
 import WalletPage from "./pages/WalletPage";
+import PortfolioPageWrapper from "./pages/PortfolioPage";
 
-import { Menu, X, Flame } from "lucide-react";
+import { Menu, X, Sun, Moon } from "lucide-react";
+import { useThemeStore } from "./store/themeStore";
 
 const queryClient = new QueryClient();
 
 function Navigation() {
   const [isOpen, setIsOpen] = useState(false);
   const location = useLocation();
+  const { theme, toggleTheme } = useThemeStore();
+  const isDark = theme === "dark";
 
   const links = [
-    { to: "/", label: "Home" },
-    { to: "/swap", label: "Swap" },
+    { to: "/", label: "Swap" },
     { to: "/trending", label: "Trending" },
     { to: "/transfer", label: "Transfer" },
     { to: "/explore", label: "Explore" },
-    { to: "/liquidity", label: "Liquidity" },
-    { to: "/wallet", label: "Wallet" },
-    { to: "/about", label: "About" },
-    { to: "/contact", label: "Contact" }
+    { to: "/liquidity", label: "Pool" },
+    { to: "/portfolio", label: "Portfolio" },
+    { to: "/wallet", label: "Wallet" }
   ];
 
   return (
-    <nav className="sticky top-0 z-50 border-b border-zinc-900 bg-black/60 backdrop-blur-xl transition px-4 py-4 max-w-6xl mx-auto rounded-b-2xl">
-      <div className="flex items-center justify-between">
-        {/* Logo and Name */}
-        <Link to="/" className="flex items-center gap-2 group">
-          <img 
-            src="/logo.png" 
-            alt="MSTSwap Logo" 
-            className="h-8 w-8 object-contain group-hover:scale-110 transition duration-300"
-          />
-          <span className="font-extrabold uppercase tracking-widest text-sm bg-gradient-to-r from-pink-500 to-orange-500 bg-clip-text text-transparent group-hover:text-neon-pink">
-            MSTSWAP
-          </span>
-        </Link>
+    <motion.nav
+      initial={{ y: -16, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.45, ease: "easeOut" }}
+      className="sticky top-0 z-50 px-4 pt-4"
+    >
+      <div
+        className={`mx-auto flex w-full max-w-[calc(100%-2rem)] items-center justify-between gap-4 rounded-3xl border px-5 py-3 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.18)] backdrop-blur-xl transition duration-300
+          ${isDark ? "border-zinc-800/70 bg-zinc-950/55 text-white" : "border-slate-250 bg-white/45 text-zinc-950"}`}
+      >
+        <div className="flex items-center gap-3">
+          <Link
+            to="/"
+            className={`flex items-center gap-2 transition duration-200 ${isDark ? "text-white" : "text-zinc-950"}`}
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-cyan-500/15 text-cyan-500 shadow-sm border border-cyan-500/10">
+              <span className="text-base font-extrabold tracking-tight">M</span>
+            </div>
+            <span className="text-xs font-black uppercase tracking-[0.24em] bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">MSTSwap</span>
+          </Link>
+        </div>
 
         {/* Desktop Links */}
-        <div className="hidden md:flex items-center gap-6">
+        <div className="hidden lg:flex items-center gap-1.5">
           {links.map((link) => {
-            const isActive = location.pathname === link.to;
+            const isActive = link.to === "/"
+              ? location.pathname === "/" || location.pathname === "/swap"
+              : location.pathname === link.to;
             return (
-              <Link 
-                key={link.to} 
+              <Link
+                key={link.to}
                 to={link.to}
-                className={`text-xs uppercase tracking-wider font-semibold transition ${isActive ? "text-pink-500 font-extrabold text-neon-pink" : "text-zinc-400 hover:text-white"}`}
+                className={`rounded-full px-3 py-1.5 text-[9px] font-extrabold uppercase tracking-[0.16em] transition duration-200
+                  ${isActive 
+                    ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_28px_-22px_rgba(34,211,238,0.7)] border border-cyan-500/10" 
+                    : isDark 
+                      ? "text-zinc-400 hover:text-white hover:bg-white/5" 
+                      : "text-zinc-600 hover:text-zinc-950 hover:bg-slate-100/50"}`}
               >
                 {link.label}
               </Link>
@@ -67,79 +82,103 @@ function Navigation() {
           })}
         </div>
 
-        {/* Launch DApp CTA on Desktop */}
-        <div className="hidden md:block">
-          <Link 
-            to="/swap" 
-            className="flex items-center gap-1.5 rounded-lg gradient-gta px-4 py-2 text-xs font-semibold text-white transition hover:scale-103 shadow-md shadow-pink-500/10"
+        {/* Right tools */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleTheme}
+            className={`flex h-9 w-9 items-center justify-center rounded-2xl border transition duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-400/40
+              ${isDark ? "border-zinc-800 bg-zinc-900 text-cyan-300 hover:bg-zinc-800" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"}`}
+            aria-label="Toggle theme"
           >
-            <Flame size={12} className="animate-pulse" />
-            Launch App
-          </Link>
-        </div>
+            {isDark ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
 
-        {/* Mobile menu trigger */}
-        <button 
-          onClick={() => setIsOpen(!isOpen)}
-          className="md:hidden text-zinc-400 hover:text-white transition"
-        >
-          {isOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className={`lg:hidden flex h-9 w-9 items-center justify-center rounded-2xl border transition duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-400/40
+              ${isDark ? "border-zinc-800 bg-zinc-900 text-cyan-300 hover:bg-zinc-800" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"}`}
+            aria-label="Toggle navigation menu"
+          >
+            {isOpen ? <X size={16} /> : <Menu size={16} />}
+          </button>
+        </div>
       </div>
 
-      {/* Mobile Links Dropdown */}
-      {isOpen && (
-        <div className="md:hidden mt-4 pt-4 border-t border-zinc-900 flex flex-col gap-3">
-          {links.map((link) => {
-            const isActive = location.pathname === link.to;
-            return (
-              <Link 
-                key={link.to} 
-                to={link.to}
-                onClick={() => setIsOpen(false)}
-                className={`text-xs uppercase tracking-wider font-semibold transition py-1 ${isActive ? "text-pink-500 text-neon-pink" : "text-zinc-400 hover:text-white"}`}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
-          <Link 
-            to="/swap"
-            onClick={() => setIsOpen(false)}
-            className="w-full flex items-center justify-center gap-1.5 rounded-lg gradient-gta py-3 text-xs font-semibold text-white transition mt-2"
+      {/* Mobile menu dropdown */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            className={`mx-auto mt-3 max-w-[calc(100%-2rem)] overflow-hidden rounded-3xl border p-4 shadow-[0_22px_60px_-44px_rgba(15,23,42,0.25)] backdrop-blur-xl lg:hidden
+              ${isDark ? "border-zinc-800/70 bg-zinc-950/85" : "border-slate-200/80 bg-white/85"}`}
           >
-            <Flame size={12} className="animate-pulse" />
-            Launch App
-          </Link>
-        </div>
-      )}
-    </nav>
+            <div className="flex flex-col gap-2">
+              {links.map((link) => {
+                const isActive = link.to === "/"
+                  ? location.pathname === "/" || location.pathname === "/swap"
+                  : location.pathname === link.to;
+                return (
+                  <Link
+                    key={link.to}
+                    to={link.to}
+                    onClick={() => setIsOpen(false)}
+                    className={`rounded-2xl px-4 py-2.5 text-xs font-extrabold uppercase tracking-[0.16em] transition duration-200
+                      ${isActive ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/10" : isDark ? "text-zinc-300 hover:bg-white/5" : "text-zinc-700 hover:bg-slate-100"}`}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.nav>
   );
 }
 
 function MainLayout() {
+  const { theme } = useThemeStore();
+  const isDark = theme === "dark";
+
   return (
-    <div className="relative min-h-screen text-white select-none">
-      {/* Global Canvas Particle Background */}
-      <ParticleBackground />
+    <div
+      className={`relative min-h-screen transition-colors duration-300 ease-in-out select-none
+        ${isDark ? "text-white" : "text-zinc-950"}`}
+      style={{
+        background: isDark
+          ? "radial-gradient(100% 100% at 50% 0%, #131A2A 0%, #0D111C 100%)"
+          : "radial-gradient(100% 100% at 50% 0%, #FFF4F8 0%, #F9FAFB 100%)"
+      }}
+    >
+      {/* Global persistent 3D WebGL Canvas Background */}
+      {isDark && <BackgroundCanvas />}
 
       {/* Navigation Navbar */}
       <Navigation />
 
       {/* Page Routing */}
-      <Suspense fallback={<div className="flex h-[80vh] items-center justify-center text-xs font-semibold uppercase tracking-wider text-zinc-500 animate-pulse">Loading...</div>}>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/swap" element={<SwapPage />} />
-          <Route path="/trending" element={<TrendingPage />} />
-          <Route path="/transfer" element={<TransferPage />} />
-          <Route path="/explore" element={<ExplorePage />} />
-          <Route path="/liquidity" element={<LiquidityPage />} />
-          <Route path="/wallet" element={<WalletPage />} />
-          <Route path="/about" element={<AboutPage />} />
-          <Route path="/contact" element={<ContactPage />} />
-        </Routes>
-      </Suspense>
+      <div className="relative z-10">
+        <Suspense fallback={
+          <div className="flex h-[80vh] items-center justify-center text-xs font-bold uppercase tracking-[0.2em] text-zinc-500 animate-pulse">
+            Loading System Console...
+          </div>
+        }>
+          <Routes>
+            <Route path="/" element={<SwapPage />} />
+            <Route path="/swap" element={<SwapPage />} />
+            <Route path="/trending" element={<TrendingPage />} />
+            <Route path="/transfer" element={<TransferPage />} />
+            <Route path="/explore" element={<ExplorePage />} />
+            <Route path="/liquidity" element={<LiquidityPage />} />
+            <Route path="/portfolio" element={<PortfolioPageWrapper />} />
+            <Route path="/wallet" element={<WalletPage />} />
+          </Routes>
+        </Suspense>
+      </div>
     </div>
   );
 }

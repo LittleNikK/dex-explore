@@ -1,10 +1,11 @@
 import { Router } from "express";
+import addresses from "../config/addresses.json" with { type: "json" };
 
 export const tokensRouter = Router();
 
 const TOKENS = [
-  { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: "0x97f517A686bfc21D8398C9f6bf0fC0b8d30785Fc" },
-  { symbol: "USDC", name: "USD Coin", decimals: 6, address: "0x3468b4ac95f03534a15F633790d9BbD88b130170" }
+  { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: addresses.WMST_ADDRESS },
+  { symbol: "USDC", name: "USD Coin", decimals: Number(addresses.USDC_DECIMALS ?? 6), address: addresses.USDC_ADDRESS }
 ];
 
 // GET /api/tokens -> token list for the frontend fuzzy search

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import addresses from "../config/addresses.json" with { type: "json" };
 
 export const poolsRouter = Router();
 
@@ -7,7 +8,7 @@ poolsRouter.get("/", async (_req, res) => {
   res.json({
     pools: [
       {
-        id: "0x884E9554Ed3E44c72D4a1052515BA3e72a495f15",
+        id: addresses.POOL_ADDRESS,
         token0: "WMST",
         token1: "USDC",
         feeTier: 3000,
@@ -21,7 +22,7 @@ poolsRouter.get("/", async (_req, res) => {
 // GET /api/pools/:id
 poolsRouter.get("/:id", async (req, res) => {
   res.json({ 
-    id: "0x884E9554Ed3E44c72D4a1052515BA3e72a495f15", 
+    id: addresses.POOL_ADDRESS, 
     token0: "WMST", 
     token1: "USDC", 
     feeTier: 3000,
