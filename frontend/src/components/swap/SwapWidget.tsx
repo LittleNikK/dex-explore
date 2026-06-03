@@ -13,12 +13,8 @@ import { MstSwapSettings } from "./MstSwapSettings";
 import { useMagnetic } from "../../hooks/useMagnetic";
 import { NumberTicker } from "../ui/NumberTicker";
 
-// Fallback mock prices in USDC for offline/simulation modes
-const FALLBACK_PRICES: Record<string, number> = {
-  MST: 1.85,
-  WMST: 1.85,
-  USDC: 1.00,
-};
+// Token price provider without static fallbacks
+
 
 interface SwapWidgetProps {
   theme: "light" | "dark";
@@ -53,6 +49,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     tokenOut,
     amountIn,
     slippageBps,
+    deadlineMins,
+    useRouterApi,
     setAmountIn,
     setTokenIn,
     setTokenOut,
@@ -141,7 +139,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const getTokenPrice = (symbol: string) => {
     if (symbol === "USDC") return 1.0;
     if (symbol === "MST" || symbol === "WMST") return liveMstPrice;
-    return FALLBACK_PRICES[symbol] || 1.0;
+    return 0.0;
   };
 
   // Sync token properties
@@ -263,33 +261,53 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         const quoteOutAddress = outputToken.address as Address;
         const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
-        const { result } = await publicClient.simulateContract({
-          address: CONTRACTS.quoterV2,
-          abi: quoterV2Abi,
-          functionName: "quoteExactInputSingle",
-          args: [
-            {
-              tokenIn: quoteInAddress,
-              tokenOut: quoteOutAddress,
-              amountIn: amountRaw,
-              fee: V3_FEE,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ]
-        });
+        if (useRouterApi) {
+          // Fetch quote dynamically from the backend order router
+          const res = await fetch("http://localhost:3001/api/quote", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              tokenIn: quoteInAddress || tokenIn,
+              tokenOut: quoteOutAddress || tokenOut,
+              amountIn: amountRaw.toString()
+            })
+          });
+          if (!res.ok) throw new Error("Backend SOR quote failed");
+          const route = await res.json();
+          if (active && route && route.amountOut) {
+            const outRaw = BigInt(route.amountOut);
+            setQuotedOut(outRaw);
+            setAmountOut(Number(formatUnits(outRaw, outputToken.decimals)).toFixed(4));
+          }
+        } else {
+          // Query QuoterV2 directly via viem client simulation
+          const { result } = await publicClient.simulateContract({
+            address: CONTRACTS.quoterV2,
+            abi: quoterV2Abi,
+            functionName: "quoteExactInputSingle",
+            args: [
+              {
+                tokenIn: quoteInAddress,
+                tokenOut: quoteOutAddress,
+                amountIn: amountRaw,
+                fee: V3_FEE,
+                sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+              }
+            ]
+          });
 
-        if (active && result) {
-          const outRaw = result[0];
-          setQuotedOut(outRaw);
-          setAmountOut(Number(formatUnits(outRaw, outputToken.decimals)).toFixed(4));
+          if (active && result) {
+            const outRaw = result[0];
+            setQuotedOut(outRaw);
+            setAmountOut(Number(formatUnits(outRaw, outputToken.decimals)).toFixed(4));
+          }
         }
       } catch (err) {
         if (active) {
-          const priceIn = getTokenPrice(tokenIn);
-          const priceOut = getTokenPrice(tokenOut);
-          const ratio = (priceIn / priceOut) * 0.9985;
-          const calculated = amountNumber * ratio;
-          setAmountOut(calculated.toFixed(4));
+          setAmountOut("");
+          setQuotedOut(null);
         }
       }
     }, 400);
@@ -298,7 +316,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi]);
 
   const exchangeRateString = useMemo(() => {
     const priceIn = getTokenPrice(tokenIn);
@@ -511,7 +529,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         await approveTokenIfNeeded(CONTRACTS.wmst, amountRaw, "WMST");
 
         setStatusText("[Step 3/3] Swapping WMST for USDC...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20);
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 
@@ -550,7 +568,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         await approveTokenIfNeeded(inputToken.address as Address, amountRaw, "USDC");
 
         setStatusText("[Step 2/3] Swapping USDC for WMST in wallet...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20);
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, 18);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 

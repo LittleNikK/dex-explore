@@ -19,6 +19,6 @@ quoteRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
   const { tokenIn, tokenOut, amountIn } = parsed.data;
-  const route = sor.findBestRoute(tokenIn, tokenOut, BigInt(amountIn));
+  const route = await sor.findBestRoute(tokenIn, tokenOut, BigInt(amountIn));
   res.json(route);
 });

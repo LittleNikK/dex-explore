@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sun, Moon, Info, Plus, ShieldCheck, Coins, HelpCircle, ArrowRight, ExternalLink } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, CONTRACTS, erc20Abi, testingExecutorAbi, lpStateStorageAbi } from "../config/contracts";
+import { getToken, CONTRACTS, erc20Abi, testingExecutorAbi, lpStateStorageAbi, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import { useThemeStore } from "../store/themeStore";
@@ -51,6 +51,54 @@ export default function LiquidityPage() {
 
   const wmstToken = useMemo(() => getToken("WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst }, []);
   const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc }, []);
+
+  const [liveMstPrice, setLiveMstPrice] = useState<number>(0);
+
+  useEffect(() => {
+    let active = true;
+    const client = publicClient;
+    if (!client) return;
+
+    async function fetchMstPrice(c: NonNullable<typeof client>) {
+      try {
+        const wmstAddress = CONTRACTS.wmst;
+        const usdcAddress = CONTRACTS.usdc;
+        if (!wmstAddress || !usdcAddress) return;
+
+        const oneUnitRaw = parseUnits("1", 18);
+        const { result } = await c.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wmstAddress,
+              tokenOut: usdcAddress,
+              amountIn: oneUnitRaw,
+              fee: V3_FEE,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+
+        if (active && result) {
+          const outRaw = result[0];
+          const price = Number(formatUnits(outRaw, 18));
+          setLiveMstPrice(price);
+        }
+      } catch (err) {
+        console.error("Error fetching MST price in LiquidityPage", err);
+      }
+    }
+
+    fetchMstPrice(client);
+    const interval = setInterval(() => fetchMstPrice(client), 15000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [publicClient]);
 
 
 
@@ -475,6 +523,11 @@ export default function LiquidityPage() {
                         <span className="text-xl font-bold block">
                           {lpAmount0 !== null ? Number(formatUnits(lpAmount0, wmstToken.decimals)).toFixed(4) : "0.0000"}
                         </span>
+                        {lpAmount0 !== null && (
+                          <span className={`text-xs font-mono font-bold block mt-1.5 ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
+                            ≈ ${(Number(formatUnits(lpAmount0, wmstToken.decimals)) * liveMstPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
                       </div>
 
                       <div className={`p-5 rounded-xl border backdrop-blur-sm ${isDark ? "bg-[#1B2236]/50 border-[#2C364F]/30" : "bg-zinc-50/70 border-zinc-200/40"}`}>
@@ -485,6 +538,11 @@ export default function LiquidityPage() {
                         <span className="text-xl font-bold block">
                           {lpAmount1 !== null ? Number(formatUnits(lpAmount1, usdcToken.decimals)).toFixed(4) : "0.0000"}
                         </span>
+                        {lpAmount1 !== null && (
+                          <span className={`text-xs font-mono font-bold block mt-1.5 ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
+                            ≈ ${(Number(formatUnits(lpAmount1, usdcToken.decimals)) * 1.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        )}
                       </div>
                     </div>
 

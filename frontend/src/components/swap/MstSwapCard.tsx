@@ -11,12 +11,8 @@ import { TokenLogo } from "./TokenLogos";
 import { MstTokenModal } from "./MstTokenModal";
 import { MstSwapSettings } from "./MstSwapSettings";
 
-// Fallback mock prices in USDC for unquoted offline states
-const FALLBACK_PRICES: Record<string, number> = {
-  MST: 1.85,
-  WMST: 1.85,
-  USDC: 1.00,
-};
+// Token price provider without static fallbacks
+
 
 interface MstSwapCardProps {
   theme: "light" | "dark";
@@ -42,6 +38,8 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     tokenOut,
     amountIn,
     slippageBps,
+    deadlineMins,
+    useRouterApi,
     setAmountIn,
     setTokenIn,
     setTokenOut,
@@ -112,7 +110,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
   const getTokenPrice = (symbol: string) => {
     if (symbol === "USDC") return 1.0;
     if (symbol === "MST" || symbol === "WMST") return liveMstPrice;
-    return FALLBACK_PRICES[symbol] || 1.0;
+    return 0.0;
   };
 
   const inputToken = useMemo(() => {
@@ -189,7 +187,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     };
   }, [address, isConnected, tokenIn, inputToken, publicClient, nativeBalanceData]);
 
-  // 2. Query dynamic on-chain Concentrated Quotes in real time
+  // 2. Query Concentrated Quotes in real time
   useEffect(() => {
     if (!isReadyAmount || !publicClient || !inputToken || !outputToken) {
       setQuotedOut(null);
@@ -210,40 +208,57 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     let active = true;
     const delayDebounce = setTimeout(async () => {
       try {
-        // Resolve token addresses for quoting
         const quoteInAddress = inputToken.address as Address;
         const quoteOutAddress = outputToken.address as Address;
-
         const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
-        const { result } = await publicClient.simulateContract({
-          address: CONTRACTS.quoterV2,
-          abi: quoterV2Abi,
-          functionName: "quoteExactInputSingle",
-          args: [
-            {
-              tokenIn: quoteInAddress,
-              tokenOut: quoteOutAddress,
-              amountIn: amountRaw,
-              fee: V3_FEE,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ]
-        });
+        if (useRouterApi) {
+          // Fetch quote dynamically from the backend order router
+          const res = await fetch("http://localhost:3001/api/quote", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              tokenIn: quoteInAddress || tokenIn,
+              tokenOut: quoteOutAddress || tokenOut,
+              amountIn: amountRaw.toString()
+            })
+          });
+          if (!res.ok) throw new Error("Backend SOR quote failed");
+          const route = await res.json();
+          if (active && route && route.amountOut) {
+            const outRaw = BigInt(route.amountOut);
+            setQuotedOut(outRaw);
+            setAmountOut(formatUnits(outRaw, outputToken.decimals));
+          }
+        } else {
+          // Query QuoterV2 directly via viem client simulation
+          const { result } = await publicClient.simulateContract({
+            address: CONTRACTS.quoterV2,
+            abi: quoterV2Abi,
+            functionName: "quoteExactInputSingle",
+            args: [
+              {
+                tokenIn: quoteInAddress,
+                tokenOut: quoteOutAddress,
+                amountIn: amountRaw,
+                fee: V3_FEE,
+                sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+              }
+            ]
+          });
 
-        if (active && result) {
-          const outRaw = result[0];
-          setQuotedOut(outRaw);
-          setAmountOut(formatUnits(outRaw, outputToken.decimals));
+          if (active && result) {
+            const outRaw = result[0];
+            setQuotedOut(outRaw);
+            setAmountOut(formatUnits(outRaw, outputToken.decimals));
+          }
         }
       } catch (err) {
-        // Fallback calculations for offline simulation
         if (active) {
-          const priceIn = getTokenPrice(tokenIn);
-          const priceOut = getTokenPrice(tokenOut);
-          const ratio = (priceIn / priceOut) * 0.9985;
-          const calculated = amountNumber * ratio;
-          setAmountOut(calculated.toFixed(6).replace(/\.?0+$/, ""));
+          setAmountOut("");
+          setQuotedOut(null);
         }
       }
     }, 400);
@@ -252,7 +267,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi]);
 
   // Derived exchange rates
   const exchangeRateString = useMemo(() => {
@@ -420,7 +435,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
 
         // Step 3: Swap WMST for USDC
         setStatusText("[Step 3/3] Swapping WMST for USDC...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20);
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 
@@ -458,7 +473,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
 
         // Step 2: Swap USDC to WMST
         setStatusText("[Step 2/3] Swapping USDC for WMST in wallet...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20);
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, 18);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 
@@ -521,7 +536,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       await approveTokenIfNeeded(inputToken.address as Address, amountRaw, inputToken.symbol);
 
       setStatusText("Confirm swap transaction in wallet...");
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20);
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
       const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
       const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 

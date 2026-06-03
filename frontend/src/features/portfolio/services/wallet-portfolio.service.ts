@@ -1,4 +1,4 @@
-import { formatUnits, type Address, type PublicClient } from "viem";
+import { formatUnits, parseUnits, type Address, type PublicClient } from "viem";
 import { ERC20_ABI } from "@/config/uniswap";
 import { TOKENS, tokensForChain, type Token } from "@/config/tokens";
 import type {
@@ -9,6 +9,7 @@ import type {
   PortfolioPosition,
 } from "../types";
 import { SUPPORTED_CHAINS } from "@/config/wagmi";
+import { CONTRACTS, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "@/config/contracts";
 
 const CHAIN_NATIVE_SYMBOL: Record<number, string> = {
   1: "ETH",
@@ -53,6 +54,36 @@ export async function getWalletPortfolioSnapshot({
   chainId: number;
   publicClient: PublicClient;
 }): Promise<WalletPortfolioSnapshot> {
+  // Fetch live MST price from pool dynamically
+  let liveMstPrice = 0;
+  try {
+    const wmstAddress = CONTRACTS.wmst;
+    const usdcAddress = CONTRACTS.usdc;
+    if (wmstAddress && usdcAddress) {
+      const oneUnitRaw = parseUnits("1", 18);
+      const { result } = await publicClient.simulateContract({
+        address: CONTRACTS.quoterV2,
+        abi: quoterV2Abi,
+        functionName: "quoteExactInputSingle",
+        args: [
+          {
+            tokenIn: wmstAddress,
+            tokenOut: usdcAddress,
+            amountIn: oneUnitRaw,
+            fee: V3_FEE,
+            sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+          }
+        ]
+      });
+
+      if (result) {
+        liveMstPrice = Number(formatUnits(result[0], 18));
+      }
+    }
+  } catch (err) {
+    console.error("Error fetching live MST price in portfolio service", err);
+  }
+
   const portfolioTokens = tokensForChain(chainId);
   const [nativeBalance, tokenBalances] = await Promise.all([
     publicClient.getBalance({ address }),
@@ -69,7 +100,8 @@ export async function getWalletPortfolioSnapshot({
   ]);
 
   const nativeToken = nativeTokenForChain(chainId);
-  const nativeValueUsd = nativeToken ? safeNumber(nativeBalance, nativeToken.decimals) * (nativeToken.priceUsd ?? 0) : 0;
+  const nativePrice = nativeToken ? (nativeToken.symbol === "MST" ? liveMstPrice : nativeToken.priceUsd ?? 0) : 0;
+  const nativeValueUsd = nativeToken ? safeNumber(nativeBalance, nativeToken.decimals) * nativePrice : 0;
 
   const assets: PortfolioAsset[] = [];
 
@@ -81,7 +113,7 @@ export async function getWalletPortfolioSnapshot({
       name: nativeToken.name,
       network: chainLabel(chainId),
       chainId,
-      priceUsd: nativeToken.priceUsd ?? 0,
+      priceUsd: nativePrice,
       balance,
       valueUsd: nativeValueUsd,
       change24h: 0,
@@ -95,8 +127,9 @@ export async function getWalletPortfolioSnapshot({
     const balance = typeof raw?.result === "bigint" ? raw.result : 0n;
     if (balance <= 0n) return;
 
+    const tokenPriceValue = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" ? liveMstPrice : token.priceUsd ?? 0);
     const amount = safeNumber(balance, token.decimals);
-    const valueUsd = amount * (token.priceUsd ?? 0);
+    const valueUsd = amount * tokenPriceValue;
 
     assets.push({
       id: token.symbol.toLowerCase(),
@@ -104,7 +137,7 @@ export async function getWalletPortfolioSnapshot({
       name: token.name,
       network: chainLabel(chainId),
       chainId,
-      priceUsd: token.priceUsd ?? 0,
+      priceUsd: tokenPriceValue,
       balance: amount,
       valueUsd,
       change24h: 0,

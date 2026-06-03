@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { HelpCircle } from "lucide-react";
+import { useSwapStore } from "../../store/swapStore";
 
 interface MstSwapSettingsProps {
   isOpen: boolean;
@@ -17,15 +18,25 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
   setSlippage,
   theme,
 }) => {
-  const [isAuto, setIsAuto] = useState(true);
+  const {
+    deadlineMins,
+    setDeadlineMins,
+    useRouterApi,
+    setUseRouterApi
+  } = useSwapStore();
+
+  const [isAuto, setIsAuto] = useState(slippage === 50);
   const [customVal, setCustomVal] = useState("");
-  const [deadline, setDeadline] = useState("20");
-  const [routerToggle, setRouterToggle] = useState(true);
   const [l2Toggle, setL2Toggle] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   const isDark = theme === "dark";
   const slippagePercent = (slippage / 100).toString();
+
+  // Sync isAuto when slippage changes externally
+  useEffect(() => {
+    setIsAuto(slippage === 50);
+  }, [slippage]);
 
   // Click outside listener
   useEffect(() => {
@@ -169,10 +180,11 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                value={deadline}
+                value={deadlineMins === 0 ? "" : deadlineMins.toString()}
                 onChange={(e) => {
-                  if (e.target.value === "" || /^\d*$/.test(e.target.value)) {
-                    setDeadline(e.target.value);
+                  const val = e.target.value;
+                  if (val === "" || /^\d*$/.test(val)) {
+                    setDeadlineMins(val === "" ? 0 : Number(val));
                   }
                 }}
                 className={`w-16 py-2 px-3 rounded-[12px] outline-none text-xs font-bold text-center border transition-all duration-150
@@ -199,13 +211,13 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold leading-normal">MST Swap Router API</span>
               <button
-                onClick={() => setRouterToggle(!routerToggle)}
+                onClick={() => setUseRouterApi(!useRouterApi)}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none
-                  ${routerToggle ? "bg-[#FB118E]" : isDark ? "bg-zinc-800" : "bg-zinc-200"}`}
+                  ${useRouterApi ? "bg-[#FB118E]" : isDark ? "bg-zinc-800" : "bg-zinc-200"}`}
               >
                 <span
                   className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out
-                    ${routerToggle ? "translate-x-5" : "translate-x-0"}`}
+                    ${useRouterApi ? "translate-x-5" : "translate-x-0"}`}
                 />
               </button>
             </div>

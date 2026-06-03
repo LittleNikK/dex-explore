@@ -14,14 +14,14 @@ export const TOKENS: Token[] = [
     symbol: "MST",
     name: "tMST Native Token",
     decimals: 18,
-    priceUsd: 1.85,
+    priceUsd: 0,
     chainId: 91562037, // MST Testnet
   },
   {
     symbol: "WMST",
     name: "Wrapped MST",
     decimals: 18,
-    priceUsd: 1.85,
+    priceUsd: 0,
     address: addresses.WMST_ADDRESS,
     chainId: 91562037,
   },
