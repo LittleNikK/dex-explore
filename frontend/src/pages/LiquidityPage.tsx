@@ -50,7 +50,7 @@ export default function LiquidityPage() {
   const isDark = theme === "dark";
 
   const wmstToken = useMemo(() => getToken("WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst }, []);
-  const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 6, address: CONTRACTS.usdc }, []);
+  const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc }, []);
 
 
 

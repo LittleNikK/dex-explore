@@ -11,7 +11,7 @@ import { TokenLogo } from "./TokenLogos";
 import { MstTokenModal } from "./MstTokenModal";
 import { MstSwapSettings } from "./MstSwapSettings";
 
-// Fallback mock prices in MUSD for unquoted offline states
+// Fallback mock prices in USDC for unquoted offline states
 const FALLBACK_PRICES: Record<string, number> = {
   MST: 1.85,
   WMST: 1.85,
@@ -37,16 +37,16 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
   });
 
   // Sync token selection and inputs using global swapStore
-  const { 
-    tokenIn, 
-    tokenOut, 
-    amountIn, 
-    slippageBps, 
-    setAmountIn, 
-    setTokenIn, 
-    setTokenOut, 
+  const {
+    tokenIn,
+    tokenOut,
+    amountIn,
+    slippageBps,
+    setAmountIn,
+    setTokenIn,
+    setTokenOut,
     switchTokens,
-    setSlippage 
+    setSlippage
   } = useSwapStore();
 
   const [amountOut, setAmountOut] = useState("");
@@ -60,6 +60,61 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
   const [quotedOut, setQuotedOut] = useState<bigint | null>(null);
 
   const isDark = theme === "dark";
+
+  const [liveMstPrice, setLiveMstPrice] = useState<number>(1.85);
+
+  useEffect(() => {
+    let active = true;
+    const client = publicClient;
+    if (!client) return;
+
+    async function fetchMstPrice(c: NonNullable<typeof client>) {
+      try {
+        const wmstAddress = CONTRACTS.wmst;
+        const usdcAddress = CONTRACTS.usdc;
+        if (!wmstAddress || !usdcAddress) return;
+
+        const oneUnitRaw = parseUnits("1", 18);
+        const { result } = await c.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wmstAddress,
+              tokenOut: usdcAddress,
+              amountIn: oneUnitRaw,
+              fee: V3_FEE,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+
+        if (active && result) {
+          const outRaw = result[0];
+          const price = Number(formatUnits(outRaw, 18));
+          setLiveMstPrice(price);
+        }
+      } catch (err) {
+        console.error("Error fetching MST price", err);
+      }
+    }
+
+    fetchMstPrice(client);
+    const interval = setInterval(() => fetchMstPrice(client), 15000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [publicClient]);
+
+  const getTokenPrice = (symbol: string) => {
+    if (symbol === "USDC") return 1.0;
+    if (symbol === "MST" || symbol === "WMST") return liveMstPrice;
+    return FALLBACK_PRICES[symbol] || 1.0;
+  };
+
   const inputToken = useMemo(() => {
     if (tokenIn === "MST") {
       return {
@@ -184,8 +239,8 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       } catch (err) {
         // Fallback calculations for offline simulation
         if (active) {
-          const priceIn = FALLBACK_PRICES[tokenIn] || 1;
-          const priceOut = FALLBACK_PRICES[tokenOut] || 1;
+          const priceIn = getTokenPrice(tokenIn);
+          const priceOut = getTokenPrice(tokenOut);
           const ratio = (priceIn / priceOut) * 0.9985;
           const calculated = amountNumber * ratio;
           setAmountOut(calculated.toFixed(6).replace(/\.?0+$/, ""));
@@ -197,15 +252,15 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice]);
 
   // Derived exchange rates
   const exchangeRateString = useMemo(() => {
-    const priceIn = FALLBACK_PRICES[tokenIn] || 1;
-    const priceOut = FALLBACK_PRICES[tokenOut] || 1;
+    const priceIn = getTokenPrice(tokenIn);
+    const priceOut = getTokenPrice(tokenOut);
     const rate = priceIn / priceOut;
     return `1 ${tokenIn} = ${rate.toFixed(4).replace(/\.?0+$/, "")} ${tokenOut}`;
-  }, [tokenIn, tokenOut]);
+  }, [tokenIn, tokenOut, liveMstPrice]);
 
   // Swapping inputs
   const handleFlipTokens = () => {
@@ -524,10 +579,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ type: "spring", damping: 22, stiffness: 280 }}
         className={`p-6 rounded-[24px] border shadow-xl relative
-          ${
-            isDark
-              ? "bg-[#131A2A] border-[#2C364F]/50 text-white animate-pulse-slow"
-              : "bg-white border-zinc-150 text-zinc-950"
+          ${isDark
+            ? "bg-[#131A2A] border-[#2C364F]/50 text-white animate-pulse-slow"
+            : "bg-white border-zinc-150 text-zinc-950"
           }`}
       >
         {/* Header */}
@@ -543,10 +597,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
             <button
               onClick={() => setSettingsOpen(!settingsOpen)}
               className={`p-1.5 rounded-xl transition-colors duration-150 relative
-                ${
-                  isDark
-                    ? "text-[#98A1C0] hover:text-white hover:bg-[#1B2236]"
-                    : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+                ${isDark
+                  ? "text-[#98A1C0] hover:text-white hover:bg-[#1B2236]"
+                  : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
                 }`}
             >
               <Settings size={18} />
@@ -568,10 +621,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
           {/* Top Panel (You Pay) */}
           <div
             className={`p-4 rounded-[16px] border transition-all duration-150
-              ${
-                isDark
-                  ? "bg-[#1B2236] border-[#2C364F]/40 focus-within:border-[#2C364F]"
-                  : "bg-[#F5F6FC] border-transparent focus-within:border-zinc-200 focus-within:bg-[#EFF1FA]"
+              ${isDark
+                ? "bg-[#1B2236] border-[#2C364F]/40 focus-within:border-[#2C364F]"
+                : "bg-[#F5F6FC] border-transparent focus-within:border-zinc-200 focus-within:bg-[#EFF1FA]"
               }`}
           >
             <div className="flex justify-between items-center mb-1">
@@ -606,10 +658,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setModalOpen("in")}
                 className={`flex items-center gap-1.5 py-1.5 pl-2 pr-3.5 rounded-[20px] shadow-sm border font-bold text-base transition-colors duration-150
-                  ${
-                    isDark
-                      ? "bg-[#131A2A] border-[#2C364F] hover:bg-[#2C364F]/50 text-white"
-                      : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
+                  ${isDark
+                    ? "bg-[#131A2A] border-[#2C364F] hover:bg-[#2C364F]/50 text-white"
+                    : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                   }`}
               >
                 <TokenLogo symbol={tokenIn} size={22} />
@@ -621,7 +672,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
             {/* Price equivalences */}
             {amountIn && (
               <div className={`text-[11px] mt-1 font-semibold ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
-                {(Number(amountIn) * (FALLBACK_PRICES[tokenIn] || 1)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MUSD
+                {(Number(amountIn) * getTokenPrice(tokenIn)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC
               </div>
             )}
           </div>
@@ -634,10 +685,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
               onClick={handleFlipTokens}
               disabled={isWorking}
               className={`w-10 h-10 flex items-center justify-center rounded-[12px] border shadow-lg transition-colors duration-150
-                ${
-                  isDark
-                    ? "bg-[#1B2236] border-[#2C364F] hover:border-[#FB118E] text-[#98A1C0] hover:text-[#FB118E]"
-                    : "bg-white border-zinc-150 hover:border-[#FB118E] text-zinc-500 hover:text-[#FB118E]"
+                ${isDark
+                  ? "bg-[#1B2236] border-[#2C364F] hover:border-[#FB118E] text-[#98A1C0] hover:text-[#FB118E]"
+                  : "bg-white border-zinc-150 hover:border-[#FB118E] text-zinc-500 hover:text-[#FB118E]"
                 }`}
             >
               <ArrowDown size={16} />
@@ -647,10 +697,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
           {/* Bottom Panel (You Receive) */}
           <div
             className={`p-4 rounded-[16px] border transition-all duration-150
-              ${
-                isDark
-                  ? "bg-[#1B2236] border-[#2C364F]/40 focus-within:border-[#2C364F]"
-                  : "bg-[#F5F6FC] border-transparent focus-within:border-zinc-200 focus-within:bg-[#EFF1FA]"
+              ${isDark
+                ? "bg-[#1B2236] border-[#2C364F]/40 focus-within:border-[#2C364F]"
+                : "bg-[#F5F6FC] border-transparent focus-within:border-zinc-200 focus-within:bg-[#EFF1FA]"
               }`}
           >
             <div className="flex justify-between items-center mb-1">
@@ -673,10 +722,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
                 whileTap={{ scale: 0.97 }}
                 onClick={() => setModalOpen("out")}
                 className={`flex items-center gap-1.5 py-1.5 pl-2 pr-3.5 rounded-[20px] shadow-sm border font-bold text-base transition-colors duration-150
-                  ${
-                    isDark
-                      ? "bg-[#131A2A] border-[#2C364F] hover:bg-[#2C364F]/50 text-white"
-                      : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
+                  ${isDark
+                    ? "bg-[#131A2A] border-[#2C364F] hover:bg-[#2C364F]/50 text-white"
+                    : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                   }`}
               >
                 <TokenLogo symbol={tokenOut} size={22} />
@@ -688,7 +736,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
             {/* Price equivalences */}
             {amountOut && (
               <div className={`text-[11px] mt-1 font-semibold ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
-                {(Number(amountOut) * (FALLBACK_PRICES[tokenOut] || 1)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MUSD
+                {(Number(amountOut) * getTokenPrice(tokenOut)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC
               </div>
             )}
           </div>
@@ -714,16 +762,15 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
           onClick={handleSwap}
           disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0))}
           className={`w-full mt-4 py-4 rounded-[16px] font-bold text-base tracking-wide shadow-lg transition-all duration-200
-            ${
-              !isConnected
-                ? "bg-[#FB118E]/10 hover:bg-[#FB118E]/20 text-[#FB118E]"
-                : isWorking
+            ${!isConnected
+              ? "bg-[#FB118E]/10 hover:bg-[#FB118E]/20 text-[#FB118E]"
+              : isWorking
                 ? "bg-zinc-800 border-zinc-700 text-zinc-400 cursor-not-allowed"
                 : !amountIn || Number(amountIn) <= 0
-                ? isDark
-                  ? "bg-[#1B2236] text-[#98A1C0]/40 border-[#2C364F]/30 cursor-not-allowed border"
-                  : "bg-[#F5F6FC] text-zinc-400 border-transparent cursor-not-allowed border"
-                : "bg-[#FB118E] hover:bg-[#FB118E]/95 text-white active:scale-[0.99] hover:shadow-[#FB118E]/20"
+                  ? isDark
+                    ? "bg-[#1B2236] text-[#98A1C0]/40 border-[#2C364F]/30 cursor-not-allowed border"
+                    : "bg-[#F5F6FC] text-zinc-400 border-transparent cursor-not-allowed border"
+                  : "bg-[#FB118E] hover:bg-[#FB118E]/95 text-white active:scale-[0.99] hover:shadow-[#FB118E]/20"
             }`}
         >
           {isWorking ? (
@@ -750,10 +797,9 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
             >
               <div
                 className={`p-3 rounded-xl border text-xs font-semibold leading-relaxed
-                  ${
-                    statusText === "Swap confirmed!"
-                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 animate-pulse"
-                      : "bg-[#1B2236] border-[#2C364F]/50 text-[#98A1C0]"
+                  ${statusText === "Swap confirmed!"
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400 animate-pulse"
+                    : "bg-[#1B2236] border-[#2C364F]/50 text-[#98A1C0]"
                   }`}
               >
                 <div className="flex items-center justify-between">

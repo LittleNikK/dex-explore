@@ -31,11 +31,20 @@ export interface MockTx {
 export async function topTokens(): Promise<MockToken[]> {
   return [
     {
+      address: "native",
+      symbol: "MST",
+      name: "tMST Native Token",
+      priceUsd: 1.85,
+      change24h: 1.25,
+      volume24h: 2450000,
+      tvl: 8500000
+    },
+    {
       address: "0xAa0Ab95AA3d885c00711541000eA2c2E66b9472b",
       symbol: "WMST",
       name: "Wrapped MST",
-      priceUsd: 0.5,
-      change24h: 3.42,
+      priceUsd: 1.85,
+      change24h: 1.25,
       volume24h: 1245000,
       tvl: 4500000
     },
@@ -47,33 +56,6 @@ export async function topTokens(): Promise<MockToken[]> {
       change24h: 0.01,
       volume24h: 4890000,
       tvl: 12000000
-    },
-    {
-      address: "0x2170ed8265b2828478396136587c470a1a14c241",
-      symbol: "ETH",
-      name: "Ether",
-      priceUsd: 3400.0,
-      change24h: 2.15,
-      volume24h: 18450000,
-      tvl: 42000000
-    },
-    {
-      address: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
-      symbol: "WBTC",
-      name: "Wrapped Bitcoin",
-      priceUsd: 65000.0,
-      change24h: -1.2,
-      volume24h: 9230000,
-      tvl: 28000000
-    },
-    {
-      address: "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
-      symbol: "UNI",
-      name: "Uniswap",
-      priceUsd: 8.4,
-      change24h: 5.67,
-      volume24h: 890000,
-      tvl: 3200000
     }
   ];
 }
@@ -88,24 +70,6 @@ export async function topPools(): Promise<MockPool[]> {
       tvl: 2500000,
       volume24h: 420000,
       apr: 12.4
-    },
-    {
-      address: "0x884e95d5f09e5f88d4a30f2140e2a091a9cc39b136",
-      token0: "ETH",
-      token1: "USDC",
-      feeTier: 3000,
-      tvl: 15400000,
-      volume24h: 1890000,
-      apr: 18.2
-    },
-    {
-      address: "0x5f15c187deefa02641c27ec527a09f8484dc4b1b",
-      token0: "WBTC",
-      token1: "ETH",
-      feeTier: 3000,
-      tvl: 8900000,
-      volume24h: 980000,
-      apr: 8.6
     }
   ];
 }

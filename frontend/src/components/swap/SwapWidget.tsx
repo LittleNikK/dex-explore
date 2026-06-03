@@ -13,7 +13,7 @@ import { MstSwapSettings } from "./MstSwapSettings";
 import { useMagnetic } from "../../hooks/useMagnetic";
 import { NumberTicker } from "../ui/NumberTicker";
 
-// Fallback mock prices in MUSD for offline/simulation modes
+// Fallback mock prices in USDC for offline/simulation modes
 const FALLBACK_PRICES: Record<string, number> = {
   MST: 1.85,
   WMST: 1.85,
@@ -48,16 +48,16 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   // WAGMI balance fetch
   const { data: nativeBalanceData } = useBalance({ address });
 
-  const { 
-    tokenIn, 
-    tokenOut, 
-    amountIn, 
-    slippageBps, 
-    setAmountIn, 
-    setTokenIn, 
-    setTokenOut, 
+  const {
+    tokenIn,
+    tokenOut,
+    amountIn,
+    slippageBps,
+    setAmountIn,
+    setTokenIn,
+    setTokenOut,
     switchTokens,
-    setSlippage 
+    setSlippage
   } = useSwapStore();
 
   const [amountOut, setAmountOut] = useState("");
@@ -90,6 +90,60 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const [isInHovered, setIsInHovered] = useState(false);
   const [isOutHovered, setIsOutHovered] = useState(false);
 
+  const [liveMstPrice, setLiveMstPrice] = useState<number>(1.85);
+
+  useEffect(() => {
+    let active = true;
+    const client = publicClient;
+    if (!client) return;
+
+    async function fetchMstPrice(c: NonNullable<typeof client>) {
+      try {
+        const wmstAddress = CONTRACTS.wmst;
+        const usdcAddress = CONTRACTS.usdc;
+        if (!wmstAddress || !usdcAddress) return;
+
+        const oneUnitRaw = parseUnits("1", 18);
+        const { result } = await c.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wmstAddress,
+              tokenOut: usdcAddress,
+              amountIn: oneUnitRaw,
+              fee: V3_FEE,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+
+        if (active && result) {
+          const outRaw = result[0];
+          const price = Number(formatUnits(outRaw, 18));
+          setLiveMstPrice(price);
+        }
+      } catch (err) {
+        console.error("Error fetching MST price", err);
+      }
+    }
+
+    fetchMstPrice(client);
+    const interval = setInterval(() => fetchMstPrice(client), 15000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [publicClient]);
+
+  const getTokenPrice = (symbol: string) => {
+    if (symbol === "USDC") return 1.0;
+    if (symbol === "MST" || symbol === "WMST") return liveMstPrice;
+    return FALLBACK_PRICES[symbol] || 1.0;
+  };
+
   // Sync token properties
   const inputToken = useMemo(() => {
     if (tokenIn === "MST") {
@@ -114,7 +168,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   // Retrieve balances
   const [balanceIn, setBalanceIn] = useState("0.00");
   const [balanceOut, setBalanceOut] = useState("0.00");
-  
+
   useEffect(() => {
     let active = true;
     async function fetchBalance() {
@@ -231,8 +285,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         }
       } catch (err) {
         if (active) {
-          const priceIn = FALLBACK_PRICES[tokenIn] || 1;
-          const priceOut = FALLBACK_PRICES[tokenOut] || 1;
+          const priceIn = getTokenPrice(tokenIn);
+          const priceOut = getTokenPrice(tokenOut);
           const ratio = (priceIn / priceOut) * 0.9985;
           const calculated = amountNumber * ratio;
           setAmountOut(calculated.toFixed(4));
@@ -244,14 +298,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice]);
 
   const exchangeRateString = useMemo(() => {
-    const priceIn = FALLBACK_PRICES[tokenIn] || 1;
-    const priceOut = FALLBACK_PRICES[tokenOut] || 1;
+    const priceIn = getTokenPrice(tokenIn);
+    const priceOut = getTokenPrice(tokenOut);
     const rate = priceIn / priceOut;
     return `1 ${displayTokenSymbol(tokenIn)} = ${rate.toFixed(4).replace(/\.?0+$/, "")} ${displayTokenSymbol(tokenOut)}`;
-  }, [tokenIn, tokenOut]);
+  }, [tokenIn, tokenOut, liveMstPrice]);
 
   // Flip elements with advanced crossover transition
   const handleFlipTokens = () => {
@@ -394,7 +448,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setTxHash(hash);
         setStatusText("Confirming Wrap on MST Blockchain...");
         await publicClient?.waitForTransactionReceipt({ hash });
-        
+
         // Triggers success
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
@@ -424,7 +478,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setTxHash(hash);
         setStatusText("Confirming Unwrap on MST Blockchain...");
         await publicClient?.waitForTransactionReceipt({ hash });
-        
+
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
         setToastOpen(true);
@@ -483,7 +537,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setTxHash(hash);
         setStatusText("[Step 3/3] Confirming swap on MST Blockchain...");
         await publicClient?.waitForTransactionReceipt({ hash });
-        
+
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
         setToastOpen(true);
@@ -540,7 +594,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setTxHash(unwrapHash);
         setStatusText("[Step 3/3] Confirming Unwrap on MST Blockchain...");
         await publicClient?.waitForTransactionReceipt({ hash: unwrapHash });
-        
+
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
         setToastOpen(true);
@@ -625,7 +679,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
   return (
     <div className="relative w-full max-w-[480px] mx-auto z-10 select-none">
-      
+
       {/* 3D Spring Reveal Card Container */}
       <motion.div
         initial={{ opacity: 0, scale: 0.93, rotateX: 12 }}
@@ -637,10 +691,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           mass: 1.1,
         }}
         className={`p-6 rounded-[30px] border shadow-2xl relative backdrop-blur-2xl transition-colors duration-300 overflow-visible
-          ${
-            isDark
-              ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
-              : "bg-white/80 border-zinc-200 text-zinc-950"
+          ${isDark
+            ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+            : "bg-white/80 border-zinc-200 text-zinc-950"
           }`}
         style={{
           boxShadow: isDark
@@ -681,15 +734,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                 Slippage {(slippageBps / 100).toFixed(1)}%
               </span>
             )}
-            
+
             {/* Settings button */}
             <button
               onClick={() => setSettingsOpen(!settingsOpen)}
               className={`p-2 rounded-xl transition-all duration-200 relative group
-                ${
-                  isDark
-                    ? "text-[#98A1C0] hover:text-white hover:bg-[#1B2236]/80"
-                    : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
+                ${isDark
+                  ? "text-[#98A1C0] hover:text-white hover:bg-[#1B2236]/80"
+                  : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100"
                 }`}
             >
               <Settings size={18} className="group-hover:rotate-45 transition-transform duration-300" />
@@ -718,10 +770,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   onMouseEnter={() => setIsInHovered(true)}
                   onMouseLeave={() => setIsInHovered(false)}
                   className={`p-5 rounded-2xl transition-all duration-300 relative overflow-hidden border-none
-                    ${
-                      isDark
-                        ? "bg-[#141526]/10 focus-within:bg-white/5"
-                        : "bg-zinc-50/40 focus-within:bg-zinc-50/10"
+                    ${isDark
+                      ? "bg-[#141526]/10 focus-within:bg-white/5"
+                      : "bg-zinc-50/40 focus-within:bg-zinc-50/10"
                     }`}
                 >
                   {/* Dynamic mouse glow coordinates layer */}
@@ -767,10 +818,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                       ref={tokenInMagneticRef}
                       onClick={() => setModalOpen("in")}
                       className={`flex items-center gap-2 py-2 pl-2.5 pr-4 rounded-full shadow-lg border font-display font-bold text-base transition-colors duration-150 relative z-10
-                        ${
-                          isDark
-                            ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
-                            : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
+                        ${isDark
+                          ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
+                          : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                         }`}
                     >
                       <TokenLogo symbol={tokenIn} size={24} />
@@ -781,7 +831,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
                   {amountIn && (
                     <div className="text-[11px] mt-2 font-mono font-bold text-zinc-500">
-                      ≈ {(Number(amountIn) * (FALLBACK_PRICES[tokenIn] || 1)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} MUSD
+                      ≈ {(Number(amountIn) * getTokenPrice(tokenIn)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC
                     </div>
                   )}
                 </motion.div>
@@ -796,10 +846,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   onMouseEnter={() => setIsOutHovered(true)}
                   onMouseLeave={() => setIsOutHovered(false)}
                   className={`p-5 rounded-2xl transition-all duration-300 relative overflow-hidden border-none
-                    ${
-                      isDark
-                        ? "bg-[#141526]/10 focus-within:bg-white/5"
-                        : "bg-zinc-50/40 focus-within:bg-zinc-50/10"
+                    ${isDark
+                      ? "bg-[#141526]/10 focus-within:bg-white/5"
+                      : "bg-zinc-50/40 focus-within:bg-zinc-50/10"
                     }`}
                 >
                   {/* Dynamic mouse glow coordinates layer */}
@@ -840,10 +889,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                       ref={tokenOutMagneticRef}
                       onClick={() => setModalOpen("out")}
                       className={`flex items-center gap-2 py-2 pl-2.5 pr-4 rounded-full shadow-lg border font-display font-bold text-base transition-colors duration-150 relative z-10
-                        ${
-                          isDark
-                            ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
-                            : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
+                        ${isDark
+                          ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
+                          : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                         }`}
                     >
                       <TokenLogo symbol={tokenOut} size={24} />
@@ -854,7 +902,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
                   {amountOut && (
                     <div className="text-[11px] mt-2 font-mono font-bold text-zinc-500">
-                      ≈ {(Number(amountOut) * (FALLBACK_PRICES[tokenOut] || 1)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} MUSD
+                      ≈ {(Number(amountOut) * getTokenPrice(tokenOut)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC
                     </div>
                   )}
                 </motion.div>
@@ -869,20 +917,19 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
               onClick={handleFlipTokens}
               disabled={isWorking}
               className={`w-11 h-11 flex items-center justify-center rounded-2xl border shadow-xl transition-all duration-300 relative overflow-hidden group
-                ${
-                  isDark
-                    ? "bg-[#181930] border-zinc-800/80 hover:border-cyan-400 text-cyan-400 hover:text-white"
-                    : "bg-white border-zinc-200 hover:border-cyan-400 text-zinc-600 hover:text-cyan-400"
+                ${isDark
+                  ? "bg-[#181930] border-zinc-800/80 hover:border-cyan-400 text-cyan-400 hover:text-white"
+                  : "bg-white border-zinc-200 hover:border-cyan-400 text-zinc-600 hover:text-cyan-400"
                 }`}
               style={{
-                boxShadow: isDark 
+                boxShadow: isDark
                   ? "0 4px 15px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05)"
                   : "0 4px 15px rgba(0,0,0,0.05)"
               }}
             >
               {/* Inner glowing hover layer */}
               <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/10 to-violet-500/10 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none" />
-              
+
               <motion.div
                 animate={{ rotate: arrowRotation }}
                 transition={{
@@ -920,18 +967,17 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           onClick={handleSwap}
           disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0))}
           className={`w-full mt-5 py-4.5 font-display font-bold text-base tracking-wider transition-all duration-300 relative overflow-hidden group border-none shadow-none bg-transparent select-none outline-none
-            ${
-              !isConnected
-                ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 active:scale-[0.98]"
-                : isWorking
+            ${!isConnected
+              ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 active:scale-[0.98]"
+              : isWorking
                 ? "text-zinc-500 dark:text-zinc-600 cursor-not-allowed"
                 : !amountIn || Number(amountIn) <= 0
-                ? "text-zinc-400 dark:text-zinc-700 cursor-not-allowed"
-                : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-lg transition-all duration-300 active:scale-[0.98]"
+                  ? "text-zinc-400 dark:text-zinc-700 cursor-not-allowed"
+                  : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-lg transition-all duration-300 active:scale-[0.98]"
             }`}
           style={{
-            textShadow: (!isConnected || (!amountIn || Number(amountIn) <= 0) || isWorking) 
-              ? "none" 
+            textShadow: (!isConnected || (!amountIn || Number(amountIn) <= 0) || isWorking)
+              ? "none"
               : "0 0 10px rgba(251, 17, 142, 0.5), 0 0 20px rgba(0, 240, 255, 0.2)"
           }}
         >
@@ -962,10 +1008,9 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             >
               <div
                 className={`p-3.5 rounded-2xl border text-xs font-semibold leading-relaxed font-mono
-                  ${
-                    statusText === "Swap confirmed!"
-                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                      : "bg-[#141526]/50 border-zinc-800/60 text-zinc-400"
+                  ${statusText === "Swap confirmed!"
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    : "bg-[#141526]/50 border-zinc-800/60 text-zinc-400"
                   }`}
               >
                 <div className="flex items-center justify-between">

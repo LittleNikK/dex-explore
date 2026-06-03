@@ -32,20 +32,8 @@ export const TOKENS: TokenConfig[] = [
   {
     symbol: "USDC",
     name: "USD Coin",
-    decimals: Number(import.meta.env.VITE_USDC_DECIMALS || addresses.USDC_DECIMALS || 6),
+    decimals: Number(import.meta.env.VITE_USDC_DECIMALS || addresses.USDC_DECIMALS || 18),
     address: CONTRACTS.usdc
-  },
-  {
-    symbol: "USDT",
-    name: "Tether",
-    decimals: 6,
-    address: (import.meta.env.VITE_USDT_ADDRESS || addresses.USDT_ADDRESS) as Address | undefined
-  },
-  {
-    symbol: "WBTC",
-    name: "Wrapped BTC",
-    decimals: 8,
-    address: (import.meta.env.VITE_WBTC_ADDRESS || addresses.WBTC_ADDRESS) as Address | undefined
   }
 ];
 
