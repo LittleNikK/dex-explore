@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sun, Moon, Info, Plus, ShieldCheck, Coins, HelpCircle, ArrowRight, ExternalLink } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, TOKENS, CONTRACTS, erc20Abi, testingExecutorAbi, lpStateStorageAbi, quoterV2Abi, nonfungiblePositionManagerAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../config/contracts";
+import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import { useThemeStore } from "../store/themeStore";
@@ -168,66 +168,111 @@ export default function LiquidityPage() {
     }
   };
 
-  // Helper: Fetch on-chain LP position details from TestingExecutor and LPStateStorage
+  // Helper: Fetch on-chain LP position details from NonfungiblePositionManager and Factory
   const fetchLPState = async () => {
-    if (!publicClient) return;
+    if (!publicClient || !address || !isConnected) return;
     try {
-      // 1. Fetch active token ID from executor
-      const tokenId = await publicClient.readContract({
-        address: CONTRACTS.testingExecutor,
-        abi: testingExecutorAbi,
-        functionName: "activeTokenId"
-      });
-      setActiveTokenId(tokenId);
+      // 1. Fetch balance of NFTs on Position Manager
+      const npmBalance = await publicClient.readContract({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "balanceOf",
+        args: [address]
+      }) as bigint;
 
-      if (tokenId > 0n) {
-        // 2. Fetch detailed state from lpStateStorage
-        const lpLiq = await publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpLiquidity"
-        });
-        setLpLiquidity(lpLiq);
+      let activeId = 0n;
+      let activeLiq = 0n;
+      let activePool = "";
+      let token0 = "";
+      let token1 = "";
+      let tickLower = 0;
+      let tickUpper = 0;
+      let owed0 = 0n;
+      let owed1 = 0n;
 
-        const pool = await publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "poolAddress"
-        });
-        setPoolAddress(pool);
-
-        // 3. Fetch token addresses, tick bounds, and pending fees from Position Manager
-        let tickLower = 0;
-        let tickUpper = 0;
-        try {
-          const positionInfo = await publicClient.readContract({
-            address: CONTRACTS.positionManager,
-            abi: nonfungiblePositionManagerAbi,
-            functionName: "positions",
-            args: [tokenId]
-          });
-          setToken0Address(positionInfo[2]);
-          setToken1Address(positionInfo[3]);
-          tickLower = positionInfo[5];
-          tickUpper = positionInfo[6];
-          setTokensOwed0(positionInfo[10]);
-          setTokensOwed1(positionInfo[11]);
-        } catch (posErr) {
-          console.error("Error fetching token addresses from position manager", posErr);
+      if (npmBalance > 0n) {
+        // Query token IDs
+        const tokenIds: bigint[] = [];
+        for (let i = 0n; i < npmBalance; i++) {
+          try {
+            const tokenId = await publicClient.readContract({
+              address: CONTRACTS.positionManager,
+              abi: nonfungiblePositionManagerAbi,
+              functionName: "tokenOfOwnerByIndex",
+              args: [address, i]
+            }) as bigint;
+            tokenIds.push(tokenId);
+          } catch (err) {
+            console.error("Error calling tokenOfOwnerByIndex in LiquidityPage", err);
+          }
         }
 
-        // 4. Fetch slot0 from the pool contract to calculate exact position reserves
+        // Find the first position that has active liquidity, or fall back to the first token ID overall
+        for (const tokenId of tokenIds) {
+          try {
+            const positionInfo = await publicClient.readContract({
+              address: CONTRACTS.positionManager,
+              abi: nonfungiblePositionManagerAbi,
+              functionName: "positions",
+              args: [tokenId]
+            }) as any;
+            
+            const lpLiquidityVal = positionInfo[7] as bigint;
+            if (activeId === 0n || lpLiquidityVal > 0n) {
+              activeId = tokenId;
+              activeLiq = lpLiquidityVal;
+              token0 = positionInfo[2];
+              token1 = positionInfo[3];
+              tickLower = positionInfo[5];
+              tickUpper = positionInfo[6];
+              owed0 = positionInfo[10];
+              owed1 = positionInfo[11];
+              
+              // Query factory for poolAddress
+              const fee = positionInfo[4] as number;
+              try {
+                activePool = await publicClient.readContract({
+                  address: CONTRACTS.factory,
+                  abi: uniswapV3FactoryAbi,
+                  functionName: "getPool",
+                  args: [token0 as Address, token1 as Address, fee]
+                }) as string;
+              } catch (factoryErr) {
+                console.error("Error calling factory.getPool in LiquidityPage", factoryErr);
+              }
+              
+              // If we found a position with non-zero liquidity, break so we prioritize it
+              if (lpLiquidityVal > 0n) {
+                break;
+              }
+            }
+          } catch (err) {
+            console.error(`Error querying details for tokenId ${tokenId}`, err);
+          }
+        }
+      }
+
+      if (activeId > 0n) {
+        setActiveTokenId(activeId);
+        setLpLiquidity(activeLiq);
+        setPoolAddress(activePool);
+        setToken0Address(token0);
+        setToken1Address(token1);
+        setTokensOwed0(owed0);
+        setTokensOwed1(owed1);
+
+        // Fetch slot0 of pool to calculate reserves
         let calculated = false;
-        if (pool && pool !== "0x0000000000000000000000000000000000000000") {
+        if (activePool && activePool !== "0x0000000000000000000000000000000000000000") {
           try {
             const slot0 = await publicClient.readContract({
-              address: pool as Address,
+              address: activePool as Address,
               abi: poolAbi,
               functionName: "slot0"
             });
             const sqrtPriceX96 = slot0[0];
             const [calculatedAmt0, calculatedAmt1] = getAmountsForLiquidity(
-              lpLiq,
+              activeLiq,
               sqrtPriceX96,
               tickLower,
               tickUpper
@@ -236,28 +281,15 @@ export default function LiquidityPage() {
             setLpAmount1(calculatedAmt1);
             calculated = true;
           } catch (mathErr) {
-            console.error("Failed calculating V3 reserves, using storage fallback", mathErr);
+            console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
           }
         }
-
-        // Fallback to storage values if pool slot0 reading/calculation failed
         if (!calculated) {
-          const lpAmt0 = await publicClient.readContract({
-            address: CONTRACTS.lpStateStorage,
-            abi: lpStateStorageAbi,
-            functionName: "lpAmount0"
-          });
-          setLpAmount0(lpAmt0);
-
-          const lpAmt1 = await publicClient.readContract({
-            address: CONTRACTS.lpStateStorage,
-            abi: lpStateStorageAbi,
-            functionName: "lpAmount1"
-          });
-          setLpAmount1(lpAmt1);
+          setLpAmount0(0n);
+          setLpAmount1(0n);
         }
-
       } else {
+        setActiveTokenId(null);
         setLpLiquidity(0n);
         setLpAmount0(0n);
         setLpAmount1(0n);
@@ -268,7 +300,7 @@ export default function LiquidityPage() {
         setTokensOwed1(0n);
       }
     } catch (e) {
-      console.error("Error fetching LP states", e);
+      console.error("Error fetching LP states in LiquidityPage", e);
     }
   };
 
@@ -285,26 +317,26 @@ export default function LiquidityPage() {
     return () => clearInterval(interval);
   }, [address, isConnected, publicClient]);
 
-  // Helper: Request token spending approvals to TestingExecutor
+  // Helper: Request token spending approvals to NonfungiblePositionManager
   async function approveTokenIfNeeded(tokenAddress: Address, amountRaw: bigint, symbol: string) {
     if (!publicClient || !address) return;
 
-    setStatusText(`Checking ${symbol} allowance for Executor...`);
+    setStatusText(`Checking ${symbol} allowance for Position Manager...`);
     const allowance = await publicClient.readContract({
       address: tokenAddress,
       abi: erc20Abi,
       functionName: "allowance",
-      args: [address, CONTRACTS.testingExecutor]
+      args: [address, CONTRACTS.positionManager]
     });
 
     if (allowance >= amountRaw) return;
 
-    setStatusText(`Approving Testing Executor to use your ${symbol}...`);
+    setStatusText(`Approving Position Manager to use your ${symbol}...`);
     const approveTx = await writeContractAsync({
       address: tokenAddress,
       abi: erc20Abi,
       functionName: "approve",
-      args: [CONTRACTS.testingExecutor, amountRaw]
+      args: [CONTRACTS.positionManager, amountRaw]
     });
 
     setStatusText(`Confirming ${symbol} approval on-chain...`);
@@ -326,7 +358,7 @@ export default function LiquidityPage() {
 
   // Action 1: Create Pool and Initialize Concentrated Liquidity
   const handleInitializePool = async () => {
-    if (!isConnected) return;
+    if (!isConnected || !address) return;
     if (!(await ensureMstChain())) {
       return;
     }
@@ -344,34 +376,62 @@ export default function LiquidityPage() {
       const wmstRaw = parseUnits(initWmst, wmstToken.decimals);
       const usdcRaw = parseUnits(initUsdc, usdcToken.decimals);
 
-      // Step A: Approve WMST and USDC for testingExecutor
+      // Step A: Approve WMST and USDC for Position Manager
       await approveTokenIfNeeded(wmstToken.address as Address, wmstRaw, "WMST");
       await approveTokenIfNeeded(usdcToken.address as Address, usdcRaw, "USDC");
 
-      // Step B: Call initiatePoolAndLiquidity on testingExecutor
-      setStatusText("Confirming pool creation transaction in wallet...");
-      
+      // Sort tokens numerically as Uniswap V3 requires token0 < token1
+      let t0 = wmstToken.address as Address;
+      let t1 = usdcToken.address as Address;
+      let amount0 = wmstRaw;
+      let amount1 = usdcRaw;
+      if (t0.toLowerCase() > t1.toLowerCase()) {
+        t0 = usdcToken.address as Address;
+        t1 = wmstToken.address as Address;
+        amount0 = usdcRaw;
+        amount1 = wmstRaw;
+      }
+
+      // Step B: Call createAndInitializePoolIfNecessary
+      setStatusText("Initializing Uniswap V3 Pool in wallet...");
       const SQRT_PRICE_1_TO_1 = 79228162514264337593543950336n;
-      const hash = await writeContractAsync({
-        address: CONTRACTS.testingExecutor,
-        abi: testingExecutorAbi,
-        functionName: "initiatePoolAndLiquidity",
-        args: [
-          {
-            fee: initFee,
-            sqrtPriceX96: SQRT_PRICE_1_TO_1,
-            wmstDesired: wmstRaw,
-            usdcDesired: usdcRaw,
-            tickLower: Number(initTickLower),
-            tickUpper: Number(initTickUpper)
-          }
-        ],
-        value: 0n // paying via WMST ERC20
+      const initHash = await writeContractAsync({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "createAndInitializePoolIfNecessary",
+        args: [t0, t1, initFee, SQRT_PRICE_1_TO_1]
       });
 
-      setTxHash(hash);
-      setStatusText("Submitting initialization request to MST Blockchain...");
-      await publicClient?.waitForTransactionReceipt({ hash });
+      setStatusText("Waiting for pool initialization confirmation...");
+      await publicClient?.waitForTransactionReceipt({ hash: initHash });
+
+      // Step C: Mint position on NonfungiblePositionManager
+      setStatusText("Confirming liquidity minting in wallet...");
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
+      const mintHash = await writeContractAsync({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "mint",
+        args: [
+          {
+            token0: t0,
+            token1: t1,
+            fee: initFee,
+            tickLower: Number(initTickLower),
+            tickUpper: Number(initTickUpper),
+            amount0Desired: amount0,
+            amount1Desired: amount1,
+            amount0Min: 0n,
+            amount1Min: 0n,
+            recipient: address as Address,
+            deadline
+          }
+        ]
+      });
+
+      setTxHash(mintHash);
+      setStatusText("Submitting concentrated liquidity mint to MST Blockchain...");
+      await publicClient?.waitForTransactionReceipt({ hash: mintHash });
       setStatusText("Pool successfully initialized and concentrated liquidity minted!");
       setInitWmst("");
       setInitUsdc("");
@@ -407,18 +467,35 @@ export default function LiquidityPage() {
       const wmstRaw = parseUnits(addWmst, wmstToken.decimals);
       const usdcRaw = parseUnits(addUsdc, usdcToken.decimals);
 
-      // Step A: Approve tokens
+      // Step A: Approve tokens for Position Manager
       await approveTokenIfNeeded(wmstToken.address as Address, wmstRaw, "WMST");
       await approveTokenIfNeeded(usdcToken.address as Address, usdcRaw, "USDC");
 
-      // Step B: Call increaseActiveLiquidity
+      // Sort desired amounts according to token0/token1 addresses
+      let amount0Desired = wmstRaw;
+      let amount1Desired = usdcRaw;
+      if (token0Address.toLowerCase() === usdcToken.address?.toLowerCase()) {
+        amount0Desired = usdcRaw;
+        amount1Desired = wmstRaw;
+      }
+
+      // Step B: Call increaseLiquidity on NonfungiblePositionManager
       setStatusText("Confirming active range addition in wallet...");
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
       const hash = await writeContractAsync({
-        address: CONTRACTS.testingExecutor,
-        abi: testingExecutorAbi,
-        functionName: "increaseActiveLiquidity",
-        args: [wmstRaw, usdcRaw],
-        value: 0n
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "increaseLiquidity",
+        args: [
+          {
+            tokenId: activeTokenId,
+            amount0Desired,
+            amount1Desired,
+            amount0Min: 0n,
+            amount1Min: 0n,
+            deadline
+          }
+        ]
       });
 
       setTxHash(hash);
@@ -440,7 +517,7 @@ export default function LiquidityPage() {
 
   // Action 3: Remove Active Liquidity
   const handleRemoveLiquidity = async () => {
-    if (!isConnected || !activeTokenId || !lpLiquidity) return;
+    if (!isConnected || !address || !activeTokenId || !lpLiquidity) return;
 
     if (!(await ensureMstChain())) {
       return;
@@ -454,16 +531,44 @@ export default function LiquidityPage() {
       const liqToRemove = (lpLiquidity * BigInt(removePercent)) / 100n;
       
       setStatusText(`Confirming removal of ${removePercent}% liquidity in wallet...`);
-      const hash = await writeContractAsync({
-        address: CONTRACTS.testingExecutor,
-        abi: testingExecutorAbi,
-        functionName: "decreaseActiveLiquidity",
-        args: [liqToRemove]
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
+      const decreaseHash = await writeContractAsync({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "decreaseLiquidity",
+        args: [
+          {
+            tokenId: activeTokenId,
+            liquidity: liqToRemove,
+            amount0Min: 0n,
+            amount1Min: 0n,
+            deadline
+          }
+        ]
       });
 
-      setTxHash(hash);
-      setStatusText("Confirming withdrawal on MST Blockchain...");
-      await publicClient?.waitForTransactionReceipt({ hash });
+      setStatusText("Confirming liquidity reduction on-chain...");
+      await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
+
+      setStatusText("Withdrawing principal tokens from pool...");
+      const collectHash = await writeContractAsync({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "collect",
+        args: [
+          {
+            tokenId: activeTokenId,
+            recipient: address as Address,
+            amount0Max: 340282366920938463463374607431768211455n, // uint128 max
+            amount1Max: 340282366920938463463374607431768211455n
+          }
+        ]
+      });
+
+      setTxHash(collectHash);
+      setStatusText("Reclaiming principal tokens back to your wallet...");
+      await publicClient?.waitForTransactionReceipt({ hash: collectHash });
+
       setStatusText("Liquidity successfully removed!");
       fetchLPState();
       fetchERC20Balances();
@@ -478,7 +583,7 @@ export default function LiquidityPage() {
 
   // Action 4: Collect Active LP Fees
   const handleCollectFees = async () => {
-    if (!isConnected || !activeTokenId) return;
+    if (!isConnected || !address || !activeTokenId) return;
 
     if (!(await ensureMstChain())) {
       return;
@@ -491,9 +596,17 @@ export default function LiquidityPage() {
     try {
       setStatusText("Confirming fee collection in wallet...");
       const hash = await writeContractAsync({
-        address: CONTRACTS.testingExecutor,
-        abi: testingExecutorAbi,
-        functionName: "collectActiveFees"
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "collect",
+        args: [
+          {
+            tokenId: activeTokenId,
+            recipient: address as Address,
+            amount0Max: 340282366920938463463374607431768211455n, // uint128 max
+            amount1Max: 340282366920938463463374607431768211455n
+          }
+        ]
       });
 
       setTxHash(hash);

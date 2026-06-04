@@ -13,7 +13,8 @@ export const CONTRACTS = {
   testingExecutor: (import.meta.env.VITE_TESTING_EXECUTOR_ADDRESS || addresses.TESTING_EXECUTOR_ADDRESS) as Address,
   lpStateStorage: (import.meta.env.VITE_LP_STATE_STORAGE_ADDRESS || addresses.LP_STATE_STORAGE_ADDRESS) as Address,
   positionManager: (import.meta.env.VITE_POSITION_MANAGER_ADDRESS || addresses.POSITION_MANAGER_ADDRESS) as Address,
-  usdc: (import.meta.env.VITE_USDC_ADDRESS || addresses.USDC_ADDRESS) as Address
+  usdc: (import.meta.env.VITE_USDC_ADDRESS || addresses.USDC_ADDRESS) as Address,
+  factory: (import.meta.env.VITE_V3_FACTORY_ADDRESS || addresses.V3_FACTORY_ADDRESS) as Address
 };
 
 export interface TokenConfig {
@@ -277,5 +278,152 @@ export const nonfungiblePositionManagerAbi = [
       { name: "tokensOwed0", type: "uint128" },
       { name: "tokensOwed1", type: "uint128" }
     ]
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "tokenOfOwnerByIndex",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "index", type: "uint256" }
+    ],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "factory",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }]
+  },
+  {
+    type: "function",
+    name: "mint",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "token0", type: "address" },
+          { name: "token1", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "tickLower", type: "int24" },
+          { name: "tickUpper", type: "int24" },
+          { name: "amount0Desired", type: "uint256" },
+          { name: "amount1Desired", type: "uint256" },
+          { name: "amount0Min", type: "uint256" },
+          { name: "amount1Min", type: "uint256" },
+          { name: "recipient", type: "address" },
+          { name: "deadline", type: "uint256" }
+        ]
+      }
+    ],
+    outputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "liquidity", type: "uint128" },
+      { name: "amount0", type: "uint256" },
+      { name: "amount1", type: "uint256" }
+    ]
+  },
+  {
+    type: "function",
+    name: "increaseLiquidity",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenId", type: "uint256" },
+          { name: "amount0Desired", type: "uint256" },
+          { name: "amount1Desired", type: "uint256" },
+          { name: "amount0Min", type: "uint256" },
+          { name: "amount1Min", type: "uint256" },
+          { name: "deadline", type: "uint256" }
+        ]
+      }
+    ],
+    outputs: [
+      { name: "liquidity", type: "uint128" },
+      { name: "amount0", type: "uint256" },
+      { name: "amount1", type: "uint256" }
+    ]
+  },
+  {
+    type: "function",
+    name: "decreaseLiquidity",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenId", type: "uint256" },
+          { name: "liquidity", type: "uint128" },
+          { name: "amount0Min", type: "uint256" },
+          { name: "amount1Min", type: "uint256" },
+          { name: "deadline", type: "uint256" }
+        ]
+      }
+    ],
+    outputs: [
+      { name: "amount0", type: "uint256" },
+      { name: "amount1", type: "uint256" }
+    ]
+  },
+  {
+    type: "function",
+    name: "collect",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenId", type: "uint256" },
+          { name: "recipient", type: "address" },
+          { name: "amount0Max", type: "uint128" },
+          { name: "amount1Max", type: "uint128" }
+        ]
+      }
+    ],
+    outputs: [
+      { name: "amount0", type: "uint256" },
+      { name: "amount1", type: "uint256" }
+    ]
+  },
+  {
+    type: "function",
+    name: "createAndInitializePoolIfNecessary",
+    stateMutability: "payable",
+    inputs: [
+      { name: "token0", type: "address" },
+      { name: "token1", type: "address" },
+      { name: "fee", type: "uint24" },
+      { name: "sqrtPriceX96", type: "uint160" }
+    ],
+    outputs: [{ name: "pool", type: "address" }]
+  }
+] as const;
+
+export const uniswapV3FactoryAbi = [
+  {
+    type: "function",
+    name: "getPool",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+      { name: "fee", type: "uint24" }
+    ],
+    outputs: [{ name: "pool", type: "address" }]
   }
 ] as const;

@@ -10,7 +10,7 @@ import type {
   PortfolioPosition,
 } from "../types";
 import { SUPPORTED_CHAINS } from "@/config/wagmi";
-import { CONTRACTS, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, testingExecutorAbi, lpStateStorageAbi, nonfungiblePositionManagerAbi } from "@/config/contracts";
+import { CONTRACTS, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi } from "@/config/contracts";
 import { mstChain } from "@/config/chains";
 import { getAmountsForLiquidity } from "@/utils/uniswap-math";
 import { fetchUserSwapsFromSubgraph } from "./subgraph.service";
@@ -110,23 +110,10 @@ export async function getWalletPortfolioSnapshot({
     liveMstPrice = 0.5; // Fallback nominal price
   }
 
-  // Fetch activeTokenId from TestingExecutor
-  let activeTokenId = 0n;
-  try {
-    const tokenId = await publicClient.readContract({
-      address: CONTRACTS.testingExecutor,
-      abi: testingExecutorAbi,
-      functionName: "activeTokenId"
-    });
-    activeTokenId = tokenId;
-  } catch (err) {
-    console.error("Error fetching activeTokenId in portfolio service", err);
-  }
-
   const portfolioTokens = tokensForChain(chainId);
   
-  // We can construct a Promise.all for all the read queries
-  const balancesPromise = Promise.all([
+  // Fetch native and ERC20 balances in parallel
+  const [nativeBalance, tokenBalances] = await Promise.all([
     publicClient.getBalance({ address }),
     Promise.all(
       portfolioTokens.map(async (token) => {
@@ -146,43 +133,50 @@ export async function getWalletPortfolioSnapshot({
     ),
   ]);
 
-  const lpPromise = activeTokenId > 0n
-    ? Promise.all([
-        publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpLiquidity"
-        }),
-        publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpAmount0"
-        }),
-        publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpAmount1"
-        }),
-        publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "poolAddress"
-        }),
-        publicClient.readContract({
+  // Fetch dynamic positions from NonfungiblePositionManager directly
+  let npmBalance = 0n;
+  try {
+    npmBalance = await publicClient.readContract({
+      address: CONTRACTS.positionManager,
+      abi: nonfungiblePositionManagerAbi,
+      functionName: "balanceOf",
+      args: [address]
+    }) as bigint;
+  } catch (err) {
+    console.error("Error fetching NPM balance in portfolio service", err);
+  }
+
+  const tokenIds: bigint[] = [];
+  for (let i = 0n; i < npmBalance; i++) {
+    try {
+      const tokenId = await publicClient.readContract({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "tokenOfOwnerByIndex",
+        args: [address, i]
+      }) as bigint;
+      tokenIds.push(tokenId);
+    } catch (err) {
+      console.error(`Error fetching tokenOfOwnerByIndex at index ${i}`, err);
+    }
+  }
+
+  const activePositionsRaw = await Promise.all(
+    tokenIds.map(async (tokenId) => {
+      try {
+        const positionInfo = await publicClient.readContract({
           address: CONTRACTS.positionManager,
           abi: nonfungiblePositionManagerAbi,
           functionName: "positions",
-          args: [activeTokenId]
-        })
-      ])
-    : Promise.resolve(null);
-
-  const [balancesResult, lpResult] = await Promise.all([
-    balancesPromise,
-    lpPromise
-  ]);
-
-  const [nativeBalance, tokenBalances] = balancesResult;
+          args: [tokenId]
+        });
+        return { tokenId, positionInfo };
+      } catch (err) {
+        console.error(`Error fetching positions info for token ${tokenId}`, err);
+        return null;
+      }
+    })
+  ).then(res => res.filter((x): x is NonNullable<typeof x> => x !== null));
 
   const nativeToken = nativeTokenForChain(chainId);
   const nativePrice = nativeToken ? (nativeToken.symbol === "MST" || nativeToken.symbol === "tMST" ? liveMstPrice : nativeToken.priceUsd ?? 0) : 0;
@@ -233,13 +227,28 @@ export async function getWalletPortfolioSnapshot({
   const positions: PortfolioPosition[] = [];
   let lpValueUsd = 0;
 
-  if (activeTokenId > 0n && lpResult) {
-    const [lpLiquidity, lpAmount0, lpAmount1, poolAddress, positionInfo] = lpResult as [bigint, bigint, bigint, string, any];
-    
+  for (const { tokenId, positionInfo } of activePositionsRaw) {
     const token0Address = positionInfo[2] as Address;
     const token1Address = positionInfo[3] as Address;
+    const fee = positionInfo[4] as number;
+    const tickLower = positionInfo[5] as number;
+    const tickUpper = positionInfo[6] as number;
+    const lpLiquidity = positionInfo[7] as bigint;
     const tokensOwed0 = positionInfo[10] as bigint;
     const tokensOwed1 = positionInfo[11] as bigint;
+
+    // Resolve poolAddress via factory
+    let poolAddress = "0x0000000000000000000000000000000000000000";
+    try {
+      poolAddress = await publicClient.readContract({
+        address: CONTRACTS.factory,
+        abi: uniswapV3FactoryAbi,
+        functionName: "getPool",
+        args: [token0Address, token1Address, fee]
+      }) as string;
+    } catch (err) {
+      console.error("Error fetching pool address from factory in portfolio service", err);
+    }
 
     const wmstToken = TOKENS.find((token) => token.symbol === "WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst };
     const usdcToken = TOKENS.find((token) => token.symbol === "USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc };
@@ -253,8 +262,8 @@ export async function getWalletPortfolioSnapshot({
     const price0 = token0Info.symbol === "USDC" ? 1.0 : (token0Info.symbol === "WMST" || token0Info.symbol === "MST" || token0Info.symbol === "tMST" ? liveMstPrice : (token0Info as any).priceUsd ?? 0);
     const price1 = token1Info.symbol === "USDC" ? 1.0 : (token1Info.symbol === "WMST" || token1Info.symbol === "MST" || token1Info.symbol === "tMST" ? liveMstPrice : (token1Info as any).priceUsd ?? 0);
 
-    let finalAmt0 = lpAmount0;
-    let finalAmt1 = lpAmount1;
+    let finalAmt0 = 0n;
+    let finalAmt1 = 0n;
 
     if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
       try {
@@ -264,8 +273,6 @@ export async function getWalletPortfolioSnapshot({
           functionName: "slot0"
         });
         const sqrtPriceX96 = slot0[0];
-        const tickLower = positionInfo[5];
-        const tickUpper = positionInfo[6];
         const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
           lpLiquidity,
           sqrtPriceX96,
@@ -275,22 +282,22 @@ export async function getWalletPortfolioSnapshot({
         finalAmt0 = calcAmt0;
         finalAmt1 = calcAmt1;
       } catch (mathErr) {
-        console.error("Failed calculating V3 reserves in portfolio, using storage fallback", mathErr);
+        console.error(`Failed calculating V3 reserves for tokenId ${tokenId}`, mathErr);
       }
     }
 
     const val0 = safeNumber(finalAmt0, token0Info.decimals) * price0;
     const val1 = safeNumber(finalAmt1, token1Info.decimals) * price1;
     const liquidityUsd = val0 + val1;
-    lpValueUsd = liquidityUsd;
+    lpValueUsd += liquidityUsd;
 
     const fees0 = safeNumber(tokensOwed0, token0Info.decimals) * price0;
     const fees1 = safeNumber(tokensOwed1, token1Info.decimals) * price1;
     const feesEarnedUsd = fees0 + fees1;
 
     positions.push({
-      id: activeTokenId.toString(),
-      pool: `${token0Info.symbol} / ${token1Info.symbol} 0.30%`,
+      id: tokenId.toString(),
+      pool: `${token0Info.symbol} / ${token1Info.symbol} ${(fee / 10000).toFixed(2)}%`,
       assets: [token0Info.symbol, token1Info.symbol],
       network: chainLabel(chainId),
       liquidityUsd,
