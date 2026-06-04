@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
-import { formatPortfolioUsd, formatPortfolioPct } from "../utils/portfolio-format";
+import { formatAssetUsd, formatPortfolioPct } from "../utils/portfolio-format";
+import { displayTokenSymbol } from "@/config/contracts";
 import type { PortfolioAsset } from "../types";
 
 interface PortfolioAssetsBoxesProps {
@@ -21,11 +22,11 @@ export function PortfolioAssetsBoxes({ assets }: PortfolioAssetsBoxesProps) {
             <div className="flex-1 min-w-0">
               <div className="flex justify-between items-start">
                 <div>
-                  <div className="font-bold text-base">{asset.symbol}</div>
+                  <div className="font-bold text-base">{displayTokenSymbol(asset.symbol)}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">{asset.name}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-bold text-sm">{formatPortfolioUsd(asset.valueUsd)}</div>
+                  <div className="font-bold text-sm">{formatAssetUsd(asset.symbol, asset.valueUsd)}</div>
                 </div>
               </div>
               

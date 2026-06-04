@@ -4,6 +4,7 @@ import { TOKENS, tokensForChain, type Token } from "@/config/tokens";
 import type {
   Portfolio,
   PortfolioActivity,
+  PortfolioActivityType,
   PortfolioAsset,
   PortfolioChartPoint,
   PortfolioPosition,
@@ -37,6 +38,7 @@ const CHAIN_NATIVE_SYMBOL: Record<number, string> = {
   42161: "ETH",
   10: "ETH",
   137: "MATIC",
+  91562037: "MST",
 };
 
 function tokenPrice(symbol: string) {
@@ -75,7 +77,7 @@ export async function getWalletPortfolioSnapshot({
   publicClient: PublicClient;
 }): Promise<WalletPortfolioSnapshot> {
   // Fetch live MST price from pool dynamically
-  let liveMstPrice = 0;
+  let liveMstPrice = 0.5; // Default fallback price of $0.50 for tMST
   try {
     const wmstAddress = CONTRACTS.wmst;
     const usdcAddress = CONTRACTS.usdc;
@@ -103,6 +105,9 @@ export async function getWalletPortfolioSnapshot({
   } catch (err) {
     console.error("Error fetching live MST price in portfolio service", err);
   }
+  if (liveMstPrice <= 0) {
+    liveMstPrice = 0.5; // Fallback nominal price
+  }
 
   // Fetch activeTokenId from TestingExecutor
   let activeTokenId = 0n;
@@ -122,16 +127,22 @@ export async function getWalletPortfolioSnapshot({
   // We can construct a Promise.all for all the read queries
   const balancesPromise = Promise.all([
     publicClient.getBalance({ address }),
-    portfolioTokens.length
-      ? publicClient.multicall({
-          contracts: portfolioTokens.map((token) => ({
+    Promise.all(
+      portfolioTokens.map(async (token) => {
+        try {
+          const balance = await publicClient.readContract({
             abi: ERC20_ABI,
             address: token.address as Address,
             functionName: "balanceOf",
             args: [address],
-          })),
-        })
-      : Promise.resolve([]),
+          });
+          return { result: balance };
+        } catch (err) {
+          console.error(`Error reading balance for ${token.symbol}`, err);
+          return { result: 0n };
+        }
+      })
+    ),
   ]);
 
   const lpPromise = activeTokenId > 0n
@@ -178,7 +189,7 @@ export async function getWalletPortfolioSnapshot({
 
   const assets: PortfolioAsset[] = [];
 
-  if (nativeToken && nativeBalance > 0n) {
+  if (nativeToken) {
     const balance = safeNumber(nativeBalance, nativeToken.decimals);
     assets.push({
       id: `native-${chainId}`,
@@ -198,7 +209,6 @@ export async function getWalletPortfolioSnapshot({
   portfolioTokens.forEach((token, index) => {
     const raw = tokenBalances[index] as { result?: unknown } | undefined;
     const balance = typeof raw?.result === "bigint" ? raw.result : 0n;
-    if (balance <= 0n) return;
 
     const tokenPriceValue = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" ? liveMstPrice : token.priceUsd ?? 0);
     const amount = safeNumber(balance, token.decimals);
@@ -509,6 +519,7 @@ export async function getWalletPortfolioSnapshot({
   }));
 
   const largestHolding = withAllocation[0];
+
 
   const portfolio: Portfolio = {
     address,

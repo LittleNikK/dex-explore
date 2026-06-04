@@ -3,7 +3,8 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
-import { formatPortfolioUsd, formatPortfolioPct } from "../utils/portfolio-format";
+import { formatPortfolioUsd, formatAssetUsd, formatPortfolioPct } from "../utils/portfolio-format";
+import { displayTokenSymbol } from "@/config/contracts";
 import type { PortfolioAsset } from "../types";
 
 interface PortfolioAllocationProps {
@@ -19,7 +20,7 @@ export function PortfolioAllocation({ assets, isLoading, isError, error }: Portf
   const sorted = useMemo(() => [...assets].sort((a, b) => b.valueUsd - a.valueUsd), [assets]);
   const total = sorted.reduce((sum, asset) => sum + asset.valueUsd, 0);
   const chartData = sorted.map((asset, index) => ({
-    name: asset.symbol,
+    name: displayTokenSymbol(asset.symbol),
     value: asset.valueUsd,
     allocation: asset.allocation,
     color: COLORS[index % COLORS.length],
@@ -73,7 +74,7 @@ function AllocationTooltip({ active, payload }: { active?: boolean; payload?: Ar
   return (
     <div className="rounded-2xl border border-border/70 bg-background/95 px-4 py-3 shadow-deep backdrop-blur-xl">
       <div className="text-sm font-semibold">{item.name}</div>
-      <div className="mt-1 text-sm text-muted-foreground">{formatPortfolioUsd(item.value ?? 0)}</div>
+      <div className="mt-1 text-sm text-muted-foreground">{formatAssetUsd(item.name ?? "", item.value ?? 0)}</div>
       <div className="mt-1 text-xs text-muted-foreground">{formatPortfolioPct(item.allocation ?? 0)}</div>
     </div>
   );

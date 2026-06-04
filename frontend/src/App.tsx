@@ -1,6 +1,6 @@
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { WagmiProvider } from "wagmi";
+import { WagmiProvider, useAccount, useConnect, useDisconnect, useSwitchChain, useChainId } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Link, Route, Routes, useLocation } from "react-router-dom";
 import { wagmiConfig } from "./config/wagmi";
@@ -13,8 +13,9 @@ import LiquidityPage from "./pages/LiquidityPage";
 import WalletPage from "./pages/WalletPage";
 import PortfolioPageWrapper from "./pages/PortfolioPage";
 
-import { Menu, X, Sun, Moon } from "lucide-react";
+import { Menu, X, Sun, Moon, Wallet, CheckCircle2, AlertCircle, Power, PlugZap, ExternalLink } from "lucide-react";
 import { useThemeStore } from "./store/themeStore";
+import { mstChain } from "./config/chains";
 
 const queryClient = new QueryClient();
 
@@ -24,12 +25,50 @@ function Navigation() {
   const { theme, toggleTheme } = useThemeStore();
   const isDark = theme === "dark";
 
+  const { address, isConnected, connector } = useAccount();
+  const { connectors, connect } = useConnect();
+  const { disconnect } = useDisconnect();
+  const { switchChain, isPending: isSwitching } = useSwitchChain();
+  const chainId = useChainId();
+  const onMstChain = chainId === mstChain.id;
+
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected) {
+      setShowDropdown(false);
+    }
+  }, [isConnected]);
+
+  const metaMaskConnector =
+    connectors.find((item) => item.name.toLowerCase().includes("metamask")) ??
+    connectors.find((item) => item.id === "injected");
+
+  const handleWalletClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!isConnected && metaMaskConnector) {
+      connect({ connector: metaMaskConnector });
+    } else {
+      setShowDropdown(!showDropdown);
+    }
+  };
+
   const links = [
     { to: "/", label: "Swap" },
     { to: "/explore", label: "Explore" },
     { to: "/liquidity", label: "Pool" },
-    { to: "/portfolio", label: "Portfolio" },
-    { to: "/wallet", label: "Wallet" }
+    { to: "/portfolio", label: "Portfolio" }
   ];
 
   return (
@@ -78,6 +117,101 @@ function Navigation() {
 
         {/* Right tools */}
         <div className="flex items-center gap-2">
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={handleWalletClick}
+              className="flex h-9 items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 text-[10px] font-extrabold uppercase tracking-[0.12em] text-white hover:brightness-110 active:scale-[0.98] transition-all shadow-md"
+            >
+              {isConnected && address ? (
+                <>
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  {`${address.slice(0, 6)}...${address.slice(-4)}`}
+                </>
+              ) : (
+                <>
+                  <Wallet size={12} />
+                  Connect Wallet
+                </>
+              )}
+            </button>
+
+            {/* Dropdown Menu */}
+            <AnimatePresence>
+              {showDropdown && isConnected && address && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  className={`absolute right-0 mt-3 w-80 rounded-3xl border p-5 shadow-2xl backdrop-blur-2xl z-50
+                    ${isDark 
+                      ? "border-zinc-800 bg-zinc-950/95 text-white shadow-black/85" 
+                      : "border-zinc-200 bg-white/95 text-zinc-950 shadow-slate-200/50"}`}
+                >
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-sm font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
+                      <p className="text-[10px] font-bold font-mono text-zinc-500 mt-0.5">
+                        {connector?.name ?? "MetaMask"}
+                      </p>
+                    </div>
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-md shadow-emerald-400/50" />
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className={`rounded-2xl p-3 border ${isDark ? "bg-white/5 border-white/5" : "bg-zinc-50 border-zinc-200/40"}`}>
+                      <div className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
+                      <div className="mt-1 font-mono text-xs font-bold tracking-wide break-all">
+                        {address}
+                      </div>
+                    </div>
+
+                    <div className={`flex items-center gap-2.5 rounded-2xl p-3 border ${isDark ? "bg-white/5 border-white/5" : "bg-zinc-50 border-zinc-200/40"}`}>
+                      {onMstChain ? (
+                        <CheckCircle2 className="text-emerald-400 shrink-0" size={16} />
+                      ) : (
+                        <AlertCircle className="text-amber-400 shrink-0" size={16} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-bold uppercase tracking-wider font-mono">
+                          {onMstChain ? "MST Testnet connected" : "Wrong network"}
+                        </div>
+                        <div className="text-[9px] font-bold font-mono text-zinc-500 mt-0.5">
+                          Current chain ID: {chainId}
+                        </div>
+                      </div>
+                    </div>
+
+                    {!onMstChain && (
+                      <button
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-2.5 text-xs font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all"
+                        disabled={isSwitching}
+                        onClick={() => switchChain({ chainId: mstChain.id })}
+                      >
+                        <PlugZap size={14} />
+                        {isSwitching ? "Switching..." : "Switch to MST Testnet"}
+                      </button>
+                    )}
+
+                    <button
+                      className={`flex w-full items-center justify-center gap-2 rounded-2xl border px-4 py-2.5 text-xs font-display font-bold transition-all active:scale-[0.98]
+                        ${isDark 
+                          ? "border-zinc-800 bg-white/5 text-zinc-300 hover:bg-white/10 hover:border-zinc-700" 
+                          : "border-zinc-200 bg-zinc-50 text-zinc-800 hover:bg-zinc-100 hover:border-zinc-300"}`}
+                      onClick={() => {
+                        disconnect();
+                        setShowDropdown(false);
+                      }}
+                    >
+                      <Power size={14} />
+                      Disconnect
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
           <button
             onClick={toggleTheme}
             className={`flex h-9 w-9 items-center justify-center rounded-2xl border transition duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-400/40
@@ -126,6 +260,98 @@ function Navigation() {
                   </Link>
                 );
               })}
+
+              <button
+                onClick={handleWalletClick}
+                className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 py-3 text-xs font-extrabold uppercase tracking-wider text-white hover:brightness-110 active:scale-[0.98] transition-all"
+              >
+                {isConnected && address ? (
+                  <>
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    {`${address.slice(0, 6)}...${address.slice(-4)}`}
+                  </>
+                ) : (
+                  <>
+                    <Wallet size={14} />
+                    Connect Wallet
+                  </>
+                )}
+              </button>
+
+              <AnimatePresence>
+                {showDropdown && isConnected && address && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className={`overflow-hidden rounded-2xl border p-4 shadow-lg backdrop-blur-xl mt-2
+                      ${isDark 
+                        ? "border-zinc-800 bg-zinc-950/95 text-white" 
+                        : "border-zinc-200 bg-zinc-50 text-zinc-950"}`}
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <h2 className="text-xs font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
+                        <p className="text-[9px] font-bold font-mono text-zinc-500 mt-0.5">
+                          {connector?.name ?? "MetaMask"}
+                        </p>
+                      </div>
+                      <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className={`rounded-xl p-2.5 border ${isDark ? "bg-white/5 border-white/5" : "bg-white border-zinc-200/50"}`}>
+                        <div className="text-[8px] font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
+                        <div className="mt-0.5 font-mono text-[11px] font-bold tracking-wide break-all">
+                          {address}
+                        </div>
+                      </div>
+
+                      <div className={`flex items-center gap-2 rounded-xl p-2.5 border ${isDark ? "bg-white/5 border-white/5" : "bg-white border-zinc-200/50"}`}>
+                        {onMstChain ? (
+                          <CheckCircle2 className="text-emerald-400 shrink-0" size={14} />
+                        ) : (
+                          <AlertCircle className="text-amber-400 shrink-0" size={14} />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[9px] font-bold uppercase tracking-wider font-mono">
+                            {onMstChain ? "MST Testnet connected" : "Wrong network"}
+                          </div>
+                          <div className="text-[8px] font-bold font-mono text-zinc-500 mt-0.5">
+                            Current chain ID: {chainId}
+                          </div>
+                        </div>
+                      </div>
+
+                      {!onMstChain && (
+                        <button
+                          className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-3 py-2 text-xs font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all"
+                          disabled={isSwitching}
+                          onClick={() => switchChain({ chainId: mstChain.id })}
+                        >
+                          <PlugZap size={12} />
+                          {isSwitching ? "Switching..." : "Switch to MST Testnet"}
+                        </button>
+                      )}
+
+                      <button
+                        className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-display font-bold transition-all active:scale-[0.98]
+                          ${isDark 
+                            ? "border-zinc-800 bg-white/5 text-zinc-300 hover:bg-white/10 hover:border-zinc-700" 
+                            : "border-zinc-200 bg-white text-zinc-800 hover:bg-zinc-100 hover:border-zinc-300"}`}
+                        onClick={() => {
+                          disconnect();
+                          setShowDropdown(false);
+                          setIsOpen(false);
+                        }}
+                      >
+                        <Power size={12} />
+                        Disconnect
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </motion.div>
         )}
