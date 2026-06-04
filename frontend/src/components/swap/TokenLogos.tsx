@@ -148,6 +148,7 @@ export const TokenLogo: React.FC<LogoProps & { symbol: string }> = ({
   const sym = symbol.toUpperCase();
   switch (sym) {
     case "MST":
+    case "TMST":
       return <MstLogo size={size} className={className} />;
     case "WMST":
       return <WmstLogo size={size} className={className} />;

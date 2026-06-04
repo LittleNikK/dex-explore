@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { formatPortfolioUsd } from "../utils/portfolio-format";
 import type { PortfolioChartPoint, PortfolioTimeframe } from "../types";
 
@@ -34,10 +34,18 @@ export function PortfolioValueChart({
   error,
   valueUsd,
 }: PortfolioValueChartProps) {
-  const chartData = useMemo(
-    () => data.map((point) => ({ ...point, label: new Date(point.time * 1000).toLocaleDateString() })),
-    [data],
-  );
+  const chartData = useMemo(() => {
+    return data.map((point) => {
+      const date = new Date(point.time * 1000);
+      let label = "";
+      if (selectedTimeframe === "1D") {
+        label = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      } else {
+        label = date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      }
+      return { ...point, label };
+    });
+  }, [data, selectedTimeframe]);
   const latest = chartData.at(-1)?.value ?? valueUsd ?? 0;
 
   return (

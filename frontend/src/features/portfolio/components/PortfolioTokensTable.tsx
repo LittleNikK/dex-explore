@@ -10,9 +10,10 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
-import { formatPortfolioPct, formatPortfolioUsd } from "../utils/portfolio-format";
+import { formatPortfolioPct, formatAssetUsd, formatAssetPrice } from "../utils/portfolio-format";
+import { displayTokenSymbol } from "@/config/contracts";
 import type { PortfolioAsset } from "../types";
 
 const PAGE_SIZE = 6;
@@ -114,17 +115,17 @@ export function PortfolioTokensTable({ assets, isLoading, isError, error }: Port
                       <div className="flex items-center gap-3">
                         <TokenAvatar symbol={asset.symbol} />
                         <div>
-                          <div className="font-medium">{asset.symbol}</div>
+                          <div className="font-medium">{displayTokenSymbol(asset.symbol)}</div>
                           <div className="text-xs text-muted-foreground">{asset.name}</div>
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="px-4 py-4">{formatPortfolioUsd(asset.priceUsd)}</TableCell>
+                    <TableCell className="px-4 py-4">{formatAssetPrice(asset.symbol, asset.priceUsd)}</TableCell>
                     <TableCell className={`px-4 py-4 font-medium ${asset.change24h >= 0 ? "text-success" : "text-destructive"}`}>
                       {asset.change24h >= 0 ? "+" : ""}{asset.change24h.toFixed(2)}%
                     </TableCell>
-                    <TableCell className="px-4 py-4">{asset.balance.toLocaleString(undefined, { maximumFractionDigits: 4 })}</TableCell>
-                    <TableCell className="px-4 py-4 font-medium">{formatPortfolioUsd(asset.valueUsd)}</TableCell>
+                    <TableCell className="px-4 py-4">{asset.balance.toLocaleString(undefined, { maximumFractionDigits: 18 })}</TableCell>
+                    <TableCell className="px-4 py-4 font-medium">{formatAssetUsd(asset.symbol, asset.valueUsd)}</TableCell>
                     <TableCell className="px-4 py-4">{formatPortfolioPct(asset.allocation)}</TableCell>
                   </TableRow>
                 ))}

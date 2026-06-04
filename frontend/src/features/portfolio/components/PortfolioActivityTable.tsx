@@ -10,14 +10,15 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import {
   activityLabel,
   activityStatusTone,
   formatPortfolioAddress,
   formatPortfolioTime,
-  formatPortfolioUsd,
+  formatActivityUsd,
 } from "../utils/portfolio-format";
+import { displayTokenSymbol } from "@/config/contracts";
 import type { PortfolioActivity, PortfolioActivityType } from "../types";
 
 const PAGE_SIZE = 6;
@@ -113,10 +114,12 @@ export function PortfolioActivityTable({ activity, isLoading, isError, error }: 
                         {activityLabel(item.type)}
                       </span>
                     </TableCell>
-                    <TableCell className="px-4 py-4 font-medium">{item.asset}</TableCell>
+                    <TableCell className="px-4 py-4 font-medium">
+                      {item.asset.split(" → ").map(s => displayTokenSymbol(s)).join(" → ")}
+                    </TableCell>
                     <TableCell className="px-4 py-4">
-                      <div className="font-medium">{item.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
-                      <div className="text-xs text-muted-foreground">{formatPortfolioUsd(item.amountUsd)}</div>
+                      <div className="font-medium">{item.amount.toLocaleString(undefined, { maximumFractionDigits: 18 })}</div>
+                      <div className="text-xs text-muted-foreground">{formatActivityUsd(item.asset, item.amountUsd)}</div>
                     </TableCell>
                     <TableCell className="px-4 py-4">{item.network}</TableCell>
                     <TableCell className="px-4 py-4 font-mono text-xs text-muted-foreground">

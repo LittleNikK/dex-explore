@@ -35,9 +35,9 @@ export default function PortfolioPageWrapper() {
 
   return (
     <div
-      className={`min-h-[calc(100vh-72px)] relative font-sans transition-colors duration-300 ease-in-out select-none overflow-x-hidden pb-20 pt-10 px-4 ${isDark ? "dark text-white" : "text-zinc-950"}`}
+      className={`min-h-[calc(100vh-72px)] relative font-sans transition-colors duration-300 ease-in-out select-none overflow-x-hidden py-8 sm:py-12 px-4 sm:px-6 lg:px-8 ${isDark ? "dark text-white" : "text-zinc-950"}`}
     >
-      <div className="relative z-10 max-w-6xl mx-auto space-y-8">
+      <div className="relative z-10 max-w-7xl mx-auto space-y-8">
         <PortfolioPage />
       </div>
     </div>

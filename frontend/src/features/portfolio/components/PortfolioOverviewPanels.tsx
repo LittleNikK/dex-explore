@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
-import { formatPortfolioPct, formatPortfolioUsd, formatPortfolioTime, activityLabel } from "../utils/portfolio-format";
+import { formatPortfolioPct, formatPortfolioUsd, formatAssetUsd, formatActivityUsd, formatPortfolioTime, activityLabel } from "../utils/portfolio-format";
+import { displayTokenSymbol } from "@/config/contracts";
 import type { PortfolioActivity, PortfolioAsset, PortfolioPosition } from "../types";
 
 interface PortfolioOverviewPanelsProps {
@@ -63,14 +64,14 @@ function HoldingRow({ asset }: { asset: PortfolioAsset }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="font-medium">{asset.symbol}</div>
+              <div className="font-medium">{displayTokenSymbol(asset.symbol)}</div>
               <div className="text-xs text-muted-foreground">{asset.network}</div>
             </div>
-            <div className="text-right text-sm font-semibold">{formatPortfolioUsd(asset.valueUsd)}</div>
+            <div className="text-right text-sm font-semibold">{formatAssetUsd(asset.symbol, asset.valueUsd)}</div>
           </div>
           <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
             <span>{formatPortfolioPct(asset.allocation)}</span>
-            <span>{formatPortfolioUsd(asset.balance * asset.priceUsd, true)}</span>
+            <span>{asset.balance.toLocaleString(undefined, { maximumFractionDigits: 18 })} {displayTokenSymbol(asset.symbol)}</span>
           </div>
         </div>
       </div>
@@ -85,11 +86,11 @@ function ActivityRow({ activity }: { activity: PortfolioActivity }) {
         <div>
           <div className="text-sm font-medium">{activityLabel(activity.type)}</div>
           <div className="mt-1 text-xs text-muted-foreground">
-            {activity.asset} • {activity.network}
+            {activity.asset.split(" → ").map(s => displayTokenSymbol(s)).join(" → ")} • {activity.network}
           </div>
         </div>
         <div className="text-right">
-          <div className="text-sm font-semibold">{formatPortfolioUsd(activity.amountUsd)}</div>
+          <div className="text-sm font-semibold">{formatActivityUsd(activity.asset, activity.amountUsd)}</div>
           <div className="mt-1 text-xs text-muted-foreground">{formatPortfolioTime(activity.timestamp)}</div>
         </div>
       </div>

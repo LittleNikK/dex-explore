@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { formatPortfolioAddress, formatPortfolioPct, formatPortfolioUsd } from "../utils/portfolio-format";
 import type { Portfolio } from "../types";
 

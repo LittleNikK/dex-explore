@@ -13,6 +13,28 @@ export function formatPortfolioUsd(value: number, compact = false) {
   return fmtUsd(value, { compact });
 }
 
+export function formatAssetUsd(symbol: string, value: number, compact = false) {
+  if (symbol.toUpperCase() === "USDC") {
+    return fmtUsd(value, { compact });
+  }
+  return fmtNumber(value, { compact, max: 2 });
+}
+
+export function formatAssetPrice(symbol: string, value: number) {
+  if (symbol.toUpperCase() === "USDC") {
+    return fmtUsd(value, { compact: false });
+  }
+  return fmtNumber(value, { compact: false, max: 4 });
+}
+
+export function formatActivityUsd(assetLabel: string, amountUsd: number) {
+  if (assetLabel.toUpperCase().includes("USDC")) {
+    return fmtUsd(amountUsd, { compact: false });
+  }
+  return fmtNumber(amountUsd, { compact: false, max: 2 });
+}
+
+
 export function formatPortfolioNumber(value: number, compact = false, max = 2) {
   return fmtNumber(value, { compact, max });
 }
@@ -50,4 +72,23 @@ export function activityStatusTone(status: "confirmed" | "pending" | "failed") {
   if (status === "confirmed") return "bg-success/15 text-success border-success/20";
   if (status === "pending") return "bg-warning/15 text-warning border-warning/20";
   return "bg-destructive/15 text-destructive border-destructive/20";
+}
+
+export function formatLargeNumber(val: number | string): string {
+  const num = typeof val === "string" ? parseFloat(val) : val;
+  if (isNaN(num)) return String(val);
+  
+  if (num >= 1e9) {
+    const formatted = (num / 1e9).toFixed(1).replace(/\.0$/, "");
+    return `${formatted}b`;
+  }
+  if (num >= 1e6) {
+    const formatted = (num / 1e6).toFixed(1).replace(/\.0$/, "");
+    return `${formatted}m`;
+  }
+  if (num >= 1e3) {
+    const formatted = (num / 1e3).toFixed(1).replace(/\.0$/, "");
+    return `${formatted}k`;
+  }
+  return String(num);
 }

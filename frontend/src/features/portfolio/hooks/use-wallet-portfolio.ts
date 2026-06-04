@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useWalletClient } from "wagmi";
-import { createPublicClient, custom, type Address } from "viem";
+import { usePublicClient } from "wagmi";
+import { type Address } from "viem";
 import { getWalletPortfolioSnapshot } from "../services/wallet-portfolio.service";
 import { usePortfolioStore } from "../store/portfolio-store";
-import { SUPPORTED_CHAINS } from "@/config/wagmi";
 
 export function useWalletPortfolio(address?: string, chainId?: number, enabled = false) {
-  const walletClient = useWalletClient();
+  const publicClient = usePublicClient({ chainId });
   const refreshToken = usePortfolioStore((state) => state.refreshToken);
   const resetPortfolioState = usePortfolioStore((state) => state.resetPortfolioState);
   const setPortfolio = usePortfolioStore((state) => state.setPortfolio);
@@ -19,15 +18,6 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
   const appendChartPoint = usePortfolioStore((state) => state.appendChartPoint);
   const chartData = usePortfolioStore((state) => state.chartData);
 
-  const chain = chainId ? SUPPORTED_CHAINS.find((supportedChain) => supportedChain.id === chainId) : undefined;
-  const liveClient =
-    walletClient.data && chain
-      ? (createPublicClient({
-          chain,
-          transport: custom(walletClient.data.transport as never),
-        }) as never)
-      : null;
-
   useEffect(() => {
     if (!enabled) return;
     resetPortfolioState();
@@ -35,16 +25,16 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
 
   const query = useQuery({
     queryKey: ["wallet-portfolio", address ?? "default", chainId ?? 1, refreshToken],
-    enabled: enabled && Boolean(address) && Boolean(chainId) && Boolean(liveClient),
+    enabled: enabled && Boolean(address) && Boolean(chainId) && Boolean(publicClient),
     refetchInterval: 15_000,
     staleTime: 10_000,
     gcTime: 5 * 60 * 1000,
     queryFn: async () => {
-      if (!liveClient || !address || !chainId) return null;
+      if (!publicClient || !address || !chainId) return null;
       return getWalletPortfolioSnapshot({
         address: address as Address,
         chainId,
-        publicClient: liveClient,
+        publicClient: publicClient as never,
       });
     },
   });
