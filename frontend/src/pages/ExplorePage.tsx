@@ -1,7 +1,9 @@
 import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
+import { usePriceWs } from "../hooks/usePriceWs";
+import { fetchUserSwapsFromSubgraph } from "../features/portfolio/services/subgraph.service";
 import { formatUnits, isAddress } from "viem";
 import { TOKENS, erc20Abi } from "../config/contracts";
 import { topTokens, topPools, recentTxs } from "@/lib/mock-data";
@@ -43,6 +45,14 @@ export default function ExplorePage() {
   const [txHistory, setTxHistory] = useState<ExplorerTx[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Invalidate cache queries dynamically when a socket event is broadcast
+  const queryClient = useQueryClient();
+  usePriceWs(() => {
+    queryClient.invalidateQueries({ queryKey: ["tokens"] });
+    queryClient.invalidateQueries({ queryKey: ["pools"] });
+    queryClient.invalidateQueries({ queryKey: ["txs"] });
+  });
 
   async function handleExplore() {
     setErrorMsg(null);
@@ -119,7 +129,24 @@ export default function ExplorePage() {
           details: "Transfer of 5.0 WMST"
         }
       ];
-      setTxHistory(simulatedHistory);
+
+      try {
+        const swaps = await fetchUserSwapsFromSubgraph(addressInput, 91562037);
+        if (swaps && swaps.length > 0) {
+          const formatted = swaps.map((s) => ({
+            hash: s.hash,
+            time: new Date(s.timestamp).toLocaleString(),
+            method: "Swap",
+            details: s.asset
+          }));
+          setTxHistory(formatted);
+        } else {
+          setTxHistory(simulatedHistory);
+        }
+      } catch (subgraphErr) {
+        console.warn("Subgraph query failed, using simulated history fallback", subgraphErr);
+        setTxHistory(simulatedHistory);
+      }
     } catch {
       setErrorMsg("Failed to query data for this wallet.");
     } finally {

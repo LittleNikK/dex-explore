@@ -13,6 +13,7 @@ import { SUPPORTED_CHAINS } from "@/config/wagmi";
 import { CONTRACTS, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, testingExecutorAbi, lpStateStorageAbi, nonfungiblePositionManagerAbi } from "@/config/contracts";
 import { mstChain } from "@/config/chains";
 import { getAmountsForLiquidity } from "@/utils/uniswap-math";
+import { fetchUserSwapsFromSubgraph } from "./subgraph.service";
 
 const poolAbi = [
   {
@@ -301,130 +302,176 @@ export async function getWalletPortfolioSnapshot({
   }
 
   // Fetch on-chain transaction activity
-  const activity: PortfolioActivity[] = [];
+  let activity: PortfolioActivity[] = [];
   try {
-    let logs: any[] = [];
-    let approvals: any[] = [];
-    
-    // Fetch logs in parallel
-    const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
-      publicClient.getLogs({
-        address: [CONTRACTS.usdc, CONTRACTS.wmst],
-        event: {
-          type: 'event',
-          name: 'Transfer',
-          inputs: [
-            { type: 'address', name: 'from', indexed: true },
-            { type: 'address', name: 'to', indexed: true },
-            { type: 'uint256', name: 'value' }
-          ]
-        },
-        args: {
-          from: address
-        },
-        fromBlock: 0n
-      }).catch(() => []),
-      publicClient.getLogs({
-        address: [CONTRACTS.usdc, CONTRACTS.wmst],
-        event: {
-          type: 'event',
-          name: 'Transfer',
-          inputs: [
-            { type: 'address', name: 'from', indexed: true },
-            { type: 'address', name: 'to', indexed: true },
-            { type: 'uint256', name: 'value' }
-          ]
-        },
-        args: {
-          to: address
-        },
-        fromBlock: 0n
-      }).catch(() => []),
-      publicClient.getLogs({
-        address: [CONTRACTS.usdc, CONTRACTS.wmst],
-        event: {
-          type: 'event',
-          name: 'Approval',
-          inputs: [
-            { type: 'address', name: 'owner', indexed: true },
-            { type: 'address', name: 'spender', indexed: true },
-            { type: 'uint256', name: 'value' }
-          ]
-        },
-        args: {
-          owner: address
-        },
-        fromBlock: 0n
-      }).catch(() => [])
-    ]);
+    console.log(`Querying transaction history from GraphQL Subgraph for ${address}...`);
+    activity = await fetchUserSwapsFromSubgraph(address, chainId);
+  } catch (subgraphErr) {
+    console.warn("GraphQL Subgraph query failed, falling back to direct on-chain logs query", subgraphErr);
+    try {
+      let logs: any[] = [];
+      let approvals: any[] = [];
+      
+      // Fetch logs in parallel
+      const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
+        publicClient.getLogs({
+          address: [CONTRACTS.usdc, CONTRACTS.wmst],
+          event: {
+            type: 'event',
+            name: 'Transfer',
+            inputs: [
+              { type: 'address', name: 'from', indexed: true },
+              { type: 'address', name: 'to', indexed: true },
+              { type: 'uint256', name: 'value' }
+            ]
+          },
+          args: {
+            from: address
+          },
+          fromBlock: 0n
+        }).catch(() => []),
+        publicClient.getLogs({
+          address: [CONTRACTS.usdc, CONTRACTS.wmst],
+          event: {
+            type: 'event',
+            name: 'Transfer',
+            inputs: [
+              { type: 'address', name: 'from', indexed: true },
+              { type: 'address', name: 'to', indexed: true },
+              { type: 'uint256', name: 'value' }
+            ]
+          },
+          args: {
+            to: address
+          },
+          fromBlock: 0n
+        }).catch(() => []),
+        publicClient.getLogs({
+          address: [CONTRACTS.usdc, CONTRACTS.wmst],
+          event: {
+            type: 'event',
+            name: 'Approval',
+            inputs: [
+              { type: 'address', name: 'owner', indexed: true },
+              { type: 'address', name: 'spender', indexed: true },
+              { type: 'uint256', name: 'value' }
+            ]
+          },
+          args: {
+            owner: address
+          },
+          fromBlock: 0n
+        }).catch(() => [])
+      ]);
 
-    logs = [...sentLogs, ...receivedLogs];
-    approvals = approvalLogs;
+      logs = [...sentLogs, ...receivedLogs];
+      approvals = approvalLogs;
 
-    // Get unique block numbers to fetch timestamps
-    const uniqueBlocks = Array.from(new Set([...logs, ...approvals].map(l => l.blockNumber).filter(Boolean))) as bigint[];
-    const blockTimestamps: Record<string, number> = {};
-    if (uniqueBlocks.length > 0) {
-      try {
-        const blocksToFetch = uniqueBlocks.slice(0, 10);
-        const blockData = await Promise.all(
-          blocksToFetch.map(b => publicClient.getBlock({ blockNumber: b }))
-        );
-        blockData.forEach(b => {
-          blockTimestamps[b.number.toString()] = Number(b.timestamp) * 1000;
-        });
-      } catch (err) {
-        console.error("Error fetching block timestamps", err);
+      // Get unique block numbers to fetch timestamps
+      const uniqueBlocks = Array.from(new Set([...logs, ...approvals].map(l => l.blockNumber).filter(Boolean))) as bigint[];
+      const blockTimestamps: Record<string, number> = {};
+      if (uniqueBlocks.length > 0) {
+        try {
+          const blocksToFetch = uniqueBlocks.slice(0, 10);
+          const blockData = await Promise.all(
+            blocksToFetch.map(b => publicClient.getBlock({ blockNumber: b }))
+          );
+          blockData.forEach(b => {
+            blockTimestamps[b.number.toString()] = Number(b.timestamp) * 1000;
+          });
+        } catch (err) {
+          console.error("Error fetching block timestamps", err);
+        }
       }
-    }
 
-    // Group logs by transaction hash
-    const logsByTx: Record<string, any[]> = {};
-    for (const log of logs) {
-      const hash = log.transactionHash;
-      if (!hash) continue;
-      if (!logsByTx[hash]) {
-        logsByTx[hash] = [];
+      // Group logs by transaction hash
+      const logsByTx: Record<string, any[]> = {};
+      for (const log of logs) {
+        const hash = log.transactionHash;
+        if (!hash) continue;
+        if (!logsByTx[hash]) {
+          logsByTx[hash] = [];
+        }
+        logsByTx[hash].push(log);
       }
-      logsByTx[hash].push(log);
-    }
 
-    for (const [hash, txLogs] of Object.entries(logsByTx)) {
-      txLogs.sort((a, b) => (a.logIndex ?? 0) - (b.logIndex ?? 0));
-      
-      const userOut = txLogs.find(l => l.args?.from?.toLowerCase() === address.toLowerCase());
-      const userIn = txLogs.find(l => l.args?.to?.toLowerCase() === address.toLowerCase());
-      
-      const firstLog = txLogs[0];
-      const blockNum = firstLog.blockNumber;
-      const timestamp = blockTimestamps[blockNum?.toString() || ""] || Date.now();
-      
-      const hasRouter = txLogs.some(l => 
-        [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
-        [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
-      );
-      
-      const hasPositionManager = txLogs.some(l =>
-        [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
-        [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
-      );
-
-      if (userOut && userIn && (hasRouter || hasPositionManager || txLogs.length >= 2)) {
-        const tokenOut = TOKENS.find(t => t.address?.toLowerCase() === userOut.address?.toLowerCase());
-        const tokenIn = TOKENS.find(t => t.address?.toLowerCase() === userIn.address?.toLowerCase());
+      for (const [hash, txLogs] of Object.entries(logsByTx)) {
+        txLogs.sort((a, b) => (a.logIndex ?? 0) - (b.logIndex ?? 0));
         
-        if (tokenOut && tokenIn) {
-          const amountOut = safeNumber(userOut.args.value, tokenOut.decimals);
-          const amountIn = safeNumber(userIn.args.value, tokenIn.decimals);
+        const userOut = txLogs.find(l => l.args?.from?.toLowerCase() === address.toLowerCase());
+        const userIn = txLogs.find(l => l.args?.to?.toLowerCase() === address.toLowerCase());
+        
+        const firstLog = txLogs[0];
+        const blockNum = firstLog.blockNumber;
+        const timestamp = blockTimestamps[blockNum?.toString() || ""] || Date.now();
+        
+        const hasRouter = txLogs.some(l => 
+          [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
+          [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
+        );
+        
+        const hasPositionManager = txLogs.some(l =>
+          [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
+          [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
+        );
+
+        if (userOut && userIn && (hasRouter || hasPositionManager || txLogs.length >= 2)) {
+          const tokenOut = TOKENS.find(t => t.address?.toLowerCase() === userOut.address?.toLowerCase());
+          const tokenIn = TOKENS.find(t => t.address?.toLowerCase() === userIn.address?.toLowerCase());
           
-          const priceOut = tokenOut.symbol === "USDC" ? 1.0 : (tokenOut.symbol === "WMST" || tokenOut.symbol === "MST" ? liveMstPrice : tokenOut.priceUsd ?? 0);
-          const amountUsd = amountOut * priceOut;
+          if (tokenOut && tokenIn) {
+            const amountOut = safeNumber(userOut.args.value, tokenOut.decimals);
+            const amountIn = safeNumber(userIn.args.value, tokenIn.decimals);
+            
+            const priceOut = tokenOut.symbol === "USDC" ? 1.0 : (tokenOut.symbol === "WMST" || tokenOut.symbol === "MST" ? liveMstPrice : tokenOut.priceUsd ?? 0);
+            const amountUsd = amountOut * priceOut;
+            
+            activity.push({
+              id: hash,
+              type: hasPositionManager ? "liquidity" : "swap",
+              asset: `${tokenOut.symbol} → ${tokenIn.symbol}`,
+              amount: amountIn,
+              amountUsd,
+              network: chainLabel(chainId),
+              hash,
+              timestamp,
+              status: "confirmed",
+              explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
+            });
+            continue;
+          }
+        }
+        
+        for (const log of txLogs) {
+          const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
+          if (!token) continue;
+          
+          const valueRaw = log.args?.value;
+          if (typeof valueRaw !== 'bigint') continue;
+          
+          const amount = safeNumber(valueRaw, token.decimals);
+          const price = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" || token.symbol === "MST" ? liveMstPrice : token.priceUsd ?? 0);
+          const amountUsd = amount * price;
+          
+          const from = log.args?.from;
+          let type: PortfolioActivity["type"] = "send";
+          if (from?.toLowerCase() === address.toLowerCase()) {
+            type = "send";
+          } else {
+            type = "receive";
+          }
+          
+          if (hasPositionManager) {
+            type = "liquidity";
+          } else if (hasRouter) {
+            type = "swap";
+          }
           
           activity.push({
-            id: hash,
-            type: hasPositionManager ? "liquidity" : "swap",
-            asset: `${tokenOut.symbol} → ${tokenIn.symbol}`,
-            amount: amountIn,
+            id: `${hash}-${log.logIndex}`,
+            type,
+            asset: token.symbol,
+            amount,
             amountUsd,
             network: chainLabel(chainId),
             hash,
@@ -432,11 +479,13 @@ export async function getWalletPortfolioSnapshot({
             status: "confirmed",
             explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
           });
-          continue;
         }
       }
-      
-      for (const log of txLogs) {
+
+      for (const log of approvals) {
+        const hash = log.transactionHash;
+        if (!hash) continue;
+        
         const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
         if (!token) continue;
         
@@ -447,67 +496,24 @@ export async function getWalletPortfolioSnapshot({
         const price = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" || token.symbol === "MST" ? liveMstPrice : token.priceUsd ?? 0);
         const amountUsd = amount * price;
         
-        const from = log.args?.from;
-        let type: PortfolioActivity["type"] = "send";
-        if (from?.toLowerCase() === address.toLowerCase()) {
-          type = "send";
-        } else {
-          type = "receive";
-        }
-        
-        if (hasPositionManager) {
-          type = "liquidity";
-        } else if (hasRouter) {
-          type = "swap";
-        }
-        
         activity.push({
-          id: `${hash}-${log.logIndex}`,
-          type,
+          id: `${hash}-approve-${log.logIndex}`,
+          type: "approve",
           asset: token.symbol,
           amount,
           amountUsd,
           network: chainLabel(chainId),
           hash,
-          timestamp,
+          timestamp: blockTimestamps[log.blockNumber?.toString() || ""] || Date.now(),
           status: "confirmed",
           explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
         });
       }
+      
+      activity.sort((a, b) => b.timestamp - a.timestamp);
+    } catch (logErr) {
+      console.error("Error processing transaction logs in portfolio service fallback", logErr);
     }
-
-    for (const log of approvals) {
-      const hash = log.transactionHash;
-      if (!hash) continue;
-      
-      const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
-      if (!token) continue;
-      
-      const valueRaw = log.args?.value;
-      if (typeof valueRaw !== 'bigint') continue;
-      
-      const amount = safeNumber(valueRaw, token.decimals);
-      const price = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" || token.symbol === "MST" ? liveMstPrice : token.priceUsd ?? 0);
-      const amountUsd = amount * price;
-      
-      activity.push({
-        id: `${hash}-approve-${log.logIndex}`,
-        type: "approve",
-        asset: token.symbol,
-        amount,
-        amountUsd,
-        network: chainLabel(chainId),
-        hash,
-        timestamp: blockTimestamps[log.blockNumber?.toString() || ""] || Date.now(),
-        status: "confirmed",
-        explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
-      });
-    }
-    
-    activity.sort((a, b) => b.timestamp - a.timestamp);
-
-  } catch (logErr) {
-    console.error("Error processing transaction logs in portfolio service", logErr);
   }
 
   const totalValueUsd = assets.reduce((sum, asset) => sum + asset.valueUsd, 0) + lpValueUsd;

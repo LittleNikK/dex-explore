@@ -12,6 +12,7 @@ import { MstTokenModal } from "./MstTokenModal";
 import { MstSwapSettings } from "./MstSwapSettings";
 import { useMagnetic } from "../../hooks/useMagnetic";
 import { NumberTicker } from "../ui/NumberTicker";
+import { usePriceWs } from "../../hooks/usePriceWs";
 
 // Token price provider without static fallbacks
 
@@ -42,7 +43,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const navigate = useNavigate();
 
   // WAGMI balance fetch
-  const { data: nativeBalanceData } = useBalance({ address });
+  const { data: nativeBalanceData, refetch: refetchNativeBalance } = useBalance({ address });
+
+  // Real-time WebSocket refresh trigger
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+  usePriceWs(() => {
+    refetchNativeBalance();
+    setRefreshTrigger((prev) => prev + 1);
+  });
 
   const {
     tokenIn,
@@ -200,7 +208,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenIn, inputToken, publicClient, nativeBalanceData]);
+  }, [address, isConnected, tokenIn, inputToken, publicClient, nativeBalanceData, refreshTrigger]);
 
   useEffect(() => {
     let active = true;
@@ -235,7 +243,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenOut, outputToken, publicClient, nativeBalanceData]);
+  }, [address, isConnected, tokenOut, outputToken, publicClient, nativeBalanceData, refreshTrigger]);
 
   // Handle Concentrated Pool Quotes
   useEffect(() => {
@@ -316,7 +324,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi, refreshTrigger]);
 
   const exchangeRateString = useMemo(() => {
     const priceIn = getTokenPrice(tokenIn);

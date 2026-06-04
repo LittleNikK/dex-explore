@@ -1,13 +1,19 @@
 import { useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
 import { type Address } from "viem";
 import { getWalletPortfolioSnapshot } from "../services/wallet-portfolio.service";
 import { usePortfolioStore } from "../store/portfolio-store";
 import type { PortfolioChartPoint } from "../types";
+import { usePriceWs } from "@/hooks/usePriceWs";
 
 export function useWalletPortfolio(address?: string, chainId?: number, enabled = false) {
   const publicClient = usePublicClient({ chainId });
+  const queryClient = useQueryClient();
+
+  usePriceWs(() => {
+    queryClient.invalidateQueries({ queryKey: ["wallet-portfolio"] });
+  });
   const refreshToken = usePortfolioStore((state) => state.refreshToken);
   const resetPortfolioState = usePortfolioStore((state) => state.resetPortfolioState);
   const setPortfolio = usePortfolioStore((state) => state.setPortfolio);
