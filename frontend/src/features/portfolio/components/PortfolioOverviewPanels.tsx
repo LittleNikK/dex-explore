@@ -18,7 +18,7 @@ export function PortfolioOverviewPanels({ assets, activity, positions }: Portfol
     <div className="grid gap-4 xl:grid-cols-3">
       <Card className="glass rounded-[1.75rem] border-white/60 shadow-soft">
         <CardHeader className="p-5 pb-0">
-          <div className="text-sm font-semibold">Top holdings</div>
+          <div className="text-base font-bold">Top holdings</div>
         </CardHeader>
         <CardContent className="space-y-3 p-5">
           {topAssets.length ? topAssets.map((asset) => <HoldingRow key={asset.id} asset={asset} />) : <EmptyState title="No holdings yet" body="Connect a wallet with onchain assets to populate holdings." />}
@@ -27,7 +27,7 @@ export function PortfolioOverviewPanels({ assets, activity, positions }: Portfol
 
       <Card className="glass rounded-[1.75rem] border-white/60 shadow-soft">
         <CardHeader className="p-5 pb-0">
-          <div className="text-sm font-semibold">Recent activity</div>
+          <div className="text-base font-bold">Recent activity</div>
         </CardHeader>
         <CardContent className="space-y-3 p-5">
           {topActivity.length ? topActivity.map((item) => <ActivityRow key={item.id} activity={item} />) : <EmptyState title="No activity available" body="This wallet has no indexed activity source yet." />}
@@ -36,7 +36,7 @@ export function PortfolioOverviewPanels({ assets, activity, positions }: Portfol
 
       <Card className="glass rounded-[1.75rem] border-white/60 shadow-soft">
         <CardHeader className="p-5 pb-0">
-          <div className="text-sm font-semibold">Top positions</div>
+          <div className="text-base font-bold">Top positions</div>
         </CardHeader>
         <CardContent className="space-y-3 p-5">
           {topPositions.length ? topPositions.map((position) => <PositionRow key={position.id} position={position} />) : <EmptyState title="No positions found" body="LP position data will appear here when connected to a position source." />}

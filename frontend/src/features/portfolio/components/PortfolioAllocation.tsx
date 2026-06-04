@@ -28,7 +28,7 @@ export function PortfolioAllocation({ assets, isLoading, isError, error }: Portf
   return (
     <Card className="glass overflow-hidden rounded-[2rem] border-white/60 shadow-float">
       <CardHeader className="p-5 sm:p-6">
-        <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Asset allocation</div>
+        <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">Asset allocation</div>
         <div className="mt-2 text-2xl font-semibold tracking-tight">{isLoading ? <Skeleton className="h-8 w-32 rounded-2xl" /> : formatPortfolioUsd(total)}</div>
       </CardHeader>
       <CardContent className="space-y-4 p-5 pt-0 sm:p-6 sm:pt-0">

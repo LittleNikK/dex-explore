@@ -3,6 +3,8 @@ import addresses from "./addresses.json";
 
 export const V3_FEE = 3000;
 export const ZERO_SQRT_PRICE_LIMIT = 0n;
+export const ZERO_SQRT_LIMIT = 0n;
+export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 export const CONTRACTS = {
   wmst: (import.meta.env.VITE_WMST_ADDRESS || addresses.WMST_ADDRESS) as Address,
@@ -10,6 +12,7 @@ export const CONTRACTS = {
   quoterV2: (import.meta.env.VITE_QUOTER_V2_ADDRESS || addresses.QUOTER_V2_ADDRESS) as Address,
   testingExecutor: (import.meta.env.VITE_TESTING_EXECUTOR_ADDRESS || addresses.TESTING_EXECUTOR_ADDRESS) as Address,
   lpStateStorage: (import.meta.env.VITE_LP_STATE_STORAGE_ADDRESS || addresses.LP_STATE_STORAGE_ADDRESS) as Address,
+  positionManager: (import.meta.env.VITE_POSITION_MANAGER_ADDRESS || addresses.POSITION_MANAGER_ADDRESS) as Address,
   usdc: (import.meta.env.VITE_USDC_ADDRESS || addresses.USDC_ADDRESS) as Address
 };
 
@@ -251,5 +254,28 @@ export const lpStateStorageAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }]
+  }
+] as const;
+
+export const nonfungiblePositionManagerAbi = [
+  {
+    type: "function",
+    name: "positions",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [
+      { name: "nonce", type: "uint96" },
+      { name: "operator", type: "address" },
+      { name: "token0", type: "address" },
+      { name: "token1", type: "address" },
+      { name: "fee", type: "uint24" },
+      { name: "tickLower", type: "int24" },
+      { name: "tickUpper", type: "int24" },
+      { name: "liquidity", type: "uint128" },
+      { name: "feeGrowthInside0LastX128", type: "uint256" },
+      { name: "feeGrowthInside1LastX128", type: "uint256" },
+      { name: "tokensOwed0", type: "uint128" },
+      { name: "tokensOwed1", type: "uint128" }
+    ]
   }
 ] as const;

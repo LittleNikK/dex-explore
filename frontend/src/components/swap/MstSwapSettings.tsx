@@ -94,7 +94,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
         >
           {/* Title */}
           <div className="text-xs font-bold uppercase tracking-wider mb-4 opacity-70">
-            MST Swap Settings
+            MSWAP Settings
           </div>
 
           {/* Slippage tolerance */}
@@ -209,7 +209,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
             {/* Router */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold leading-normal">MST Swap Router API</span>
+              <span className="text-xs font-bold leading-normal">MSWAP Router API</span>
               <button
                 onClick={() => setUseRouterApi(!useRouterApi)}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none
@@ -224,7 +224,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
             {/* L2 Optimizations */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold leading-normal">MST Gas Optimizations</span>
+              <span className="text-xs font-bold leading-normal">MSWAP Gas Optimizations</span>
               <button
                 onClick={() => setL2Toggle(!l2Toggle)}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none

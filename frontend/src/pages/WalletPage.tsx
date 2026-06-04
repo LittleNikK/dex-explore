@@ -30,16 +30,16 @@ export default function WalletPage() {
           <div className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-500/10 text-cyan-400">
             <Wallet size={22} />
           </div>
-          <h1 className="text-4xl font-display font-extrabold uppercase tracking-wide">Connect MetaMask</h1>
+          <h1 className="text-5xl font-display font-extrabold uppercase tracking-wide">Connect MetaMask</h1>
           <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400 font-medium">
-            Connect your wallet to MST Swap, confirm you are on MST Testnet, then continue to swaps and liquidity.
+            Connect your wallet to MSWAP, confirm you are on MST Testnet, then continue to swaps and liquidity.
           </p>
         </div>
 
         <div className="rounded-3xl border-none bg-white/75 dark:bg-[#0b0b14]/60 backdrop-blur-2xl p-6 shadow-2xl shadow-black/40">
           <div className="mb-5 flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-display font-bold text-zinc-950 dark:text-white tracking-wide">Wallet Hub</h2>
+              <h2 className="text-xl font-display font-bold text-zinc-950 dark:text-white tracking-wide">Wallet Hub</h2>
               <p className="text-xs font-bold font-mono text-zinc-500 mt-0.5">{isConnected ? connector?.name ?? "Connected" : "Not connected"}</p>
             </div>
             <span className={`h-3 w-3 rounded-full shadow-lg ${isConnected ? "bg-emerald-400" : "bg-zinc-700"}`} />

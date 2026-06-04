@@ -1,3 +1,5 @@
+import { API_BASE } from "../config/contracts";
+
 export interface MockToken {
   address: string;
   symbol: string;
@@ -28,10 +30,10 @@ export interface MockTx {
   timestamp: number;
 }
 
-// Fetch tokens from backend dynamically
+// Fetch tokens from backend dynamically using production-ready API_BASE
 export async function topTokens(): Promise<MockToken[]> {
   try {
-    const res = await fetch("http://localhost:3001/api/tokens");
+    const res = await fetch(`${API_BASE}/api/tokens`);
     const data = await res.json();
     return data.tokens || [];
   } catch (err) {
@@ -40,10 +42,10 @@ export async function topTokens(): Promise<MockToken[]> {
   }
 }
 
-// Fetch pools from backend dynamically
+// Fetch pools from backend dynamically using production-ready API_BASE
 export async function topPools(): Promise<MockPool[]> {
   try {
-    const res = await fetch("http://localhost:3001/api/pools");
+    const res = await fetch(`${API_BASE}/api/pools`);
     const data = await res.json();
     return (data.pools || []).map((p: any) => ({
       address: p.id,
@@ -60,10 +62,10 @@ export async function topPools(): Promise<MockPool[]> {
   }
 }
 
-// Fetch on-chain transactions log from backend dynamically
+// Fetch on-chain transactions log from backend dynamically using production-ready API_BASE
 export async function recentTxs(count: number): Promise<MockTx[]> {
   try {
-    const res = await fetch("http://localhost:3001/api/pools/transactions");
+    const res = await fetch(`${API_BASE}/api/pools/transactions`);
     const data = await res.json();
     const txs = data.transactions || [];
     return txs.slice(0, count);

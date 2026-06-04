@@ -44,8 +44,8 @@ export function PortfolioValueChart({
     <Card className="glass overflow-hidden rounded-[2rem] border-white/60 shadow-float">
       <CardHeader className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
         <div>
-          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
-          {isLoading ? <Skeleton className="mt-2 h-8 w-40 rounded-2xl" /> : <div className="mt-2 text-3xl font-semibold tracking-tight">{formatPortfolioUsd(latest)}</div>}
+          <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
+          {isLoading ? <Skeleton className="mt-2 h-8 w-40 rounded-2xl" /> : <div className="mt-2 text-4xl font-semibold tracking-tight">{formatPortfolioUsd(latest)}</div>}
         </div>
 
         <div className="flex flex-wrap gap-2 rounded-full border border-border/70 bg-surface/80 p-1">

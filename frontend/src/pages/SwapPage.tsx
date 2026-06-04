@@ -1,53 +1,10 @@
-import React, { useState, useEffect, useRef } from "react";
+import React from "react";
 import { motion } from "framer-motion";
-import { Sun, Moon, Search, ChevronDown } from "lucide-react";
-import { useAccount, useConnect, useDisconnect } from "wagmi";
-import { MstBrandLogo, TokenLogo } from "../components/swap/TokenLogos";
 import { SwapWidget } from "../components/swap/SwapWidget";
 import { useThemeStore } from "../store/themeStore";
 
 export default function SwapPage() {
-  const { theme, toggleTheme } = useThemeStore();
-  const [searchFocused, setSearchFocused] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-
-  // Real WAGMI account connections
-  const { address, isConnected } = useAccount();
-  const { connectors, connect } = useConnect();
-  const { disconnect } = useDisconnect();
-
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // Focus search input when user presses "/"
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "/" && document.activeElement?.tagName !== "INPUT" && document.activeElement?.tagName !== "TEXTAREA") {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
-
-  const handleConnectWallet = () => {
-    if (isConnected) {
-      disconnect();
-    } else {
-      const metaMaskConnector =
-        connectors.find((item) => item.name.toLowerCase().includes("metamask")) ??
-        connectors.find((item) => item.id === "injected");
-
-      if (metaMaskConnector) {
-        connect({ connector: metaMaskConnector });
-      } else {
-        const first = connectors[0];
-        if (first) connect({ connector: first });
-      }
-    }
-  };
-
-  const walletAddress = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : null;
+  const { theme } = useThemeStore();
   const isDark = theme === "dark";
 
   return (

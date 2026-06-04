@@ -48,7 +48,7 @@ export function PortfolioHeader({ portfolio, ensName, walletAddress, isLoading, 
               Portfolio dashboard
             </div>
 
-            {isLoading ? <Skeleton className="h-9 w-52 rounded-2xl" /> : <h1 className="font-display text-3xl font-bold text-balance sm:text-4xl">{name}</h1>}
+            {isLoading ? <Skeleton className="h-9 w-52 rounded-2xl" /> : <h1 className="font-display text-4xl font-bold text-balance sm:text-5xl">{name}</h1>}
 
             <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
               {isLoading ? (
@@ -68,11 +68,11 @@ export function PortfolioHeader({ portfolio, ensName, walletAddress, isLoading, 
 
         <div className="grid gap-3 rounded-[1.75rem] border border-white/60 bg-surface/70 p-4 shadow-soft sm:grid-cols-2">
           <div className="space-y-2">
-            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
+            <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
             {isLoading ? (
               <Skeleton className="h-10 w-40 rounded-2xl" />
             ) : (
-              <div className="text-3xl font-semibold tracking-tight">{formatPortfolioUsd(portfolio?.valueUsd ?? 0)}</div>
+              <div className="text-4xl font-semibold tracking-tight">{formatPortfolioUsd(portfolio?.valueUsd ?? 0)}</div>
             )}
             <div className={`text-sm font-medium ${portfolio && portfolio.change24h >= 0 ? "text-success" : "text-destructive"}`}>
               {isLoading ? <Skeleton className="h-4 w-24 rounded-full" /> : formatPortfolioPct(portfolio?.change24h ?? 0)}

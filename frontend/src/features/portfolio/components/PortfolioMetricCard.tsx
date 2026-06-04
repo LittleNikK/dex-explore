@@ -20,7 +20,7 @@ export function PortfolioMetricCard({ label, value, helper, loading, tone = "def
   return (
     <Card className="glass border-white/60 shadow-float">
       <CardContent className="space-y-2 p-4">
-        <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
+        <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
         {loading ? (
           <Skeleton className="h-8 w-24 rounded-2xl" />
         ) : (

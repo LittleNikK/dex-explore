@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Settings, ChevronDown, ArrowDown, Info } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../../config/contracts";
+import { getToken, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
 import { mstChain } from "../../config/chains";
 import { useSwapStore } from "../../store/swapStore";
 import { TokenLogo } from "./TokenLogos";
@@ -208,13 +208,13 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     let active = true;
     const delayDebounce = setTimeout(async () => {
       try {
-        const quoteInAddress = inputToken.address as Address;
-        const quoteOutAddress = outputToken.address as Address;
+        const quoteInAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken.address) as Address;
+        const quoteOutAddress = (tokenOut === "MST" ? CONTRACTS.wmst : outputToken.address) as Address;
         const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
         if (useRouterApi) {
           // Fetch quote dynamically from the backend order router
-          const res = await fetch("http://localhost:3001/api/quote", {
+          const res = await fetch(`${API_BASE}/api/quote`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -439,6 +439,15 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 
+        console.log("exactInputSingle (MST -> USDC):", {
+          tokenIn: CONTRACTS.wmst,
+          tokenOut: outputToken.address,
+          amountIn: amountRaw.toString(),
+          amountOutMinimum: amountOutMinimum.toString(),
+          slippageBps,
+          deadline: deadline.toString()
+        });
+
         const hash = await writeContractAsync({
           address: CONTRACTS.swapRouter,
           abi: swapRouterAbi,
@@ -476,6 +485,15 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, 18);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
+
+        console.log("exactInputSingle (USDC -> MST):", {
+          tokenIn: inputToken.address,
+          tokenOut: CONTRACTS.wmst,
+          amountIn: amountRaw.toString(),
+          amountOutMinimum: amountOutMinimum.toString(),
+          slippageBps,
+          deadline: deadline.toString()
+        });
 
         const swapHash = await writeContractAsync({
           address: CONTRACTS.swapRouter,
@@ -539,6 +557,15 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
       const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
       const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
+
+      console.log("exactInputSingle (ERC20 -> ERC20):", {
+        tokenIn: inputToken.address,
+        tokenOut: outputToken.address,
+        amountIn: amountRaw.toString(),
+        amountOutMinimum: amountOutMinimum.toString(),
+        slippageBps,
+        deadline: deadline.toString()
+      });
 
       const hash = await writeContractAsync({
         address: CONTRACTS.swapRouter,

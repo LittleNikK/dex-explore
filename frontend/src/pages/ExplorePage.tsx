@@ -131,7 +131,7 @@ export default function ExplorePage() {
     <div className="relative min-h-screen px-4 pb-20 pt-10 overflow-hidden font-sans">
       {/* Title Header */}
       <div className="mb-8 space-y-2">
-        <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent uppercase font-display">
+        <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent uppercase font-display">
           Market Analytics
         </h1>
         <p className="text-sm text-muted-foreground font-light max-w-xl">
@@ -239,7 +239,7 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-xs uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
                   <Database size={14} />
@@ -267,7 +267,7 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-xs uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
                   <ListCollapse size={14} />

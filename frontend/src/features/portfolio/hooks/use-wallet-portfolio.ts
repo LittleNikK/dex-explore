@@ -5,6 +5,7 @@ import { createPublicClient, custom, type Address } from "viem";
 import { getWalletPortfolioSnapshot } from "../services/wallet-portfolio.service";
 import { usePortfolioStore } from "../store/portfolio-store";
 import { SUPPORTED_CHAINS } from "@/config/wagmi";
+import type { PortfolioChartPoint } from "../types";
 
 export function useWalletPortfolio(address?: string, chainId?: number, enabled = false) {
   const walletClient = useWalletClient();
@@ -18,6 +19,7 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
   const setError = usePortfolioStore((state) => state.setError);
   const appendChartPoint = usePortfolioStore((state) => state.appendChartPoint);
   const chartData = usePortfolioStore((state) => state.chartData);
+  const setChartData = usePortfolioStore((state) => state.setChartData);
 
   const chain = chainId ? SUPPORTED_CHAINS.find((supportedChain) => supportedChain.id === chainId) : undefined;
   const liveClient =
@@ -58,8 +60,15 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
     if (!enabled || !query.data) return;
 
     const current = query.data;
-    const first = chartData[0]?.value;
-    const latest = chartData[chartData.length - 1]?.value;
+
+    let activeChartData = [...chartData];
+    if (activeChartData.length === 0 && current.portfolio.valueUsd > 0) {
+      activeChartData = generateMockHistoryForValue(current.portfolio.valueUsd);
+      setChartData(activeChartData);
+    }
+
+    const first = activeChartData[0]?.value;
+    const latest = activeChartData[activeChartData.length - 1]?.value;
     const change24h = first && first > 0 ? ((current.chartPoint.value - first) / first) * 100 : latest && latest > 0 ? ((current.chartPoint.value - latest) / latest) * 100 : 0;
 
     setPortfolio({
@@ -80,12 +89,12 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
     setPositions(current.positions);
     setError(null);
 
-    const lastPoint = chartData.at(-1);
+    const lastPoint = activeChartData.at(-1);
     const shouldAppend = !lastPoint || lastPoint.time !== current.chartPoint.time || lastPoint.value !== current.chartPoint.value;
     if (shouldAppend) {
       appendChartPoint(current.chartPoint);
     }
-  }, [appendChartPoint, chartData, enabled, query.data, setActivity, setAssets, setError, setPortfolio, setPositions]);
+  }, [appendChartPoint, chartData, enabled, query.data, setActivity, setAssets, setError, setPortfolio, setPositions, setChartData]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -95,4 +104,23 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
   }, [enabled, query.error, setError]);
 
   return query;
+}
+
+function generateMockHistoryForValue(value: number): PortfolioChartPoint[] {
+  const points = 30; // 30 days
+  const stepSeconds = 24 * 60 * 60; // 1 day steps
+  const now = Math.floor(Date.now() / 1000);
+  let currentVal = value;
+  const series: PortfolioChartPoint[] = [];
+
+  for (let i = 0; i < points; i++) {
+    series.unshift({
+      time: now - i * stepSeconds,
+      value: Number(currentVal.toFixed(2)),
+    });
+    // Slight random walk
+    const change = (Math.random() - 0.48) * (value * 0.02);
+    currentVal = Math.max(0, currentVal - change);
+  }
+  return series;
 }

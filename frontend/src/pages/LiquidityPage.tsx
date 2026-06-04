@@ -3,10 +3,29 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sun, Moon, Info, Plus, ShieldCheck, Coins, HelpCircle, ArrowRight, ExternalLink } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, CONTRACTS, erc20Abi, testingExecutorAbi, lpStateStorageAbi, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../config/contracts";
+import { getToken, TOKENS, CONTRACTS, erc20Abi, testingExecutorAbi, lpStateStorageAbi, quoterV2Abi, nonfungiblePositionManagerAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import { useThemeStore } from "../store/themeStore";
+import { getAmountsForLiquidity } from "../utils/uniswap-math";
+
+const poolAbi = [
+  {
+    type: "function",
+    name: "slot0",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "sqrtPriceX96", type: "uint160" },
+      { name: "tick", type: "int24" },
+      { name: "observationIndex", type: "uint16" },
+      { name: "observationCardinality", type: "uint16" },
+      { name: "observationCardinalityNext", type: "uint16" },
+      { name: "feeProtocol", type: "uint8" },
+      { name: "unlocked", type: "bool" }
+    ]
+  }
+] as const;
 
 export default function LiquidityPage() {
   const { theme, toggleTheme } = useThemeStore();
@@ -15,6 +34,9 @@ export default function LiquidityPage() {
   const { switchChainAsync, isPending: isSwitching } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
+
+  const wmstToken = useMemo(() => getToken("WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst }, []);
+  const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc }, []);
 
   // 1. Fetch live balances (native tMST vs ERC20 tokens)
   const { data: nativeBalanceData } = useBalance({ address });
@@ -27,6 +49,26 @@ export default function LiquidityPage() {
   const [lpAmount0, setLpAmount0] = useState<bigint | null>(null);
   const [lpAmount1, setLpAmount1] = useState<bigint | null>(null);
   const [poolAddress, setPoolAddress] = useState<string>("");
+  const [token0Address, setToken0Address] = useState<string>("");
+  const [token1Address, setToken1Address] = useState<string>("");
+  const [tokensOwed0, setTokensOwed0] = useState<bigint | null>(null);
+  const [tokensOwed1, setTokensOwed1] = useState<bigint | null>(null);
+
+  const token0Info = useMemo(() => {
+    if (!token0Address) return usdcToken; // Default fallback to USDC
+    const match = TOKENS.find((token) => token.address?.toLowerCase() === token0Address.toLowerCase());
+    return match || { symbol: "USDC", decimals: 18, address: token0Address as Address };
+  }, [token0Address, usdcToken]);
+
+  const token1Info = useMemo(() => {
+    if (!token1Address) return wmstToken; // Default fallback to WMST
+    const match = TOKENS.find((token) => token.address?.toLowerCase() === token1Address.toLowerCase());
+    return match || { symbol: "WMST", decimals: 18, address: token1Address as Address };
+  }, [token1Address, wmstToken]);
+
+  const getTokenPrice = (symbol: string) => {
+    return symbol === "USDC" ? 1.0 : (symbol === "WMST" || symbol === "MST" ? liveMstPrice : 0.0);
+  };
 
   // Input states for Creating / Initializing Pool
   const [initFee, setInitFee] = useState<number>(3000); // 0.3%
@@ -48,9 +90,6 @@ export default function LiquidityPage() {
   const [txHash, setTxHash] = useState("");
 
   const isDark = theme === "dark";
-
-  const wmstToken = useMemo(() => getToken("WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst }, []);
-  const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc }, []);
 
   const [liveMstPrice, setLiveMstPrice] = useState<number>(0);
 
@@ -150,31 +189,83 @@ export default function LiquidityPage() {
         });
         setLpLiquidity(lpLiq);
 
-        const lpAmt0 = await publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpAmount0"
-        });
-        setLpAmount0(lpAmt0);
-
-        const lpAmt1 = await publicClient.readContract({
-          address: CONTRACTS.lpStateStorage,
-          abi: lpStateStorageAbi,
-          functionName: "lpAmount1"
-        });
-        setLpAmount1(lpAmt1);
-
         const pool = await publicClient.readContract({
           address: CONTRACTS.lpStateStorage,
           abi: lpStateStorageAbi,
           functionName: "poolAddress"
         });
         setPoolAddress(pool);
+
+        // 3. Fetch token addresses, tick bounds, and pending fees from Position Manager
+        let tickLower = 0;
+        let tickUpper = 0;
+        try {
+          const positionInfo = await publicClient.readContract({
+            address: CONTRACTS.positionManager,
+            abi: nonfungiblePositionManagerAbi,
+            functionName: "positions",
+            args: [tokenId]
+          });
+          setToken0Address(positionInfo[2]);
+          setToken1Address(positionInfo[3]);
+          tickLower = positionInfo[5];
+          tickUpper = positionInfo[6];
+          setTokensOwed0(positionInfo[10]);
+          setTokensOwed1(positionInfo[11]);
+        } catch (posErr) {
+          console.error("Error fetching token addresses from position manager", posErr);
+        }
+
+        // 4. Fetch slot0 from the pool contract to calculate exact position reserves
+        let calculated = false;
+        if (pool && pool !== "0x0000000000000000000000000000000000000000") {
+          try {
+            const slot0 = await publicClient.readContract({
+              address: pool as Address,
+              abi: poolAbi,
+              functionName: "slot0"
+            });
+            const sqrtPriceX96 = slot0[0];
+            const [calculatedAmt0, calculatedAmt1] = getAmountsForLiquidity(
+              lpLiq,
+              sqrtPriceX96,
+              tickLower,
+              tickUpper
+            );
+            setLpAmount0(calculatedAmt0);
+            setLpAmount1(calculatedAmt1);
+            calculated = true;
+          } catch (mathErr) {
+            console.error("Failed calculating V3 reserves, using storage fallback", mathErr);
+          }
+        }
+
+        // Fallback to storage values if pool slot0 reading/calculation failed
+        if (!calculated) {
+          const lpAmt0 = await publicClient.readContract({
+            address: CONTRACTS.lpStateStorage,
+            abi: lpStateStorageAbi,
+            functionName: "lpAmount0"
+          });
+          setLpAmount0(lpAmt0);
+
+          const lpAmt1 = await publicClient.readContract({
+            address: CONTRACTS.lpStateStorage,
+            abi: lpStateStorageAbi,
+            functionName: "lpAmount1"
+          });
+          setLpAmount1(lpAmt1);
+        }
+
       } else {
         setLpLiquidity(0n);
         setLpAmount0(0n);
         setLpAmount1(0n);
         setPoolAddress("");
+        setToken0Address("");
+        setToken1Address("");
+        setTokensOwed0(0n);
+        setTokensOwed1(0n);
       }
     } catch (e) {
       console.error("Error fetching LP states", e);
@@ -439,7 +530,7 @@ export default function LiquidityPage() {
             animate={{ opacity: 1, y: 0 }}
             className="space-y-2"
           >
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight">
+            <h1 className="text-5xl md:text-6xl font-black tracking-tight">
               <span className="bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
                 Liquidity Pool
               </span>
@@ -504,7 +595,7 @@ export default function LiquidityPage() {
                         <span className={`inline-block text-[11px] font-bold py-1.5 px-3 rounded-lg mb-2 ${isDark ? "bg-cyan-500/15 text-cyan-400" : "bg-cyan-500/10 text-cyan-600"}`}>
                           NFT Token ID #{activeTokenId.toString()}
                         </span>
-                        <h3 className="text-lg font-bold">Your Concentrated Position</h3>
+                        <h3 className="text-xl font-bold">Your Concentrated Position</h3>
                       </div>
                       <div className="text-right">
                         <p className={`text-xs ${isDark ? "text-zinc-500" : "text-zinc-600"} mb-1`}>Active Range</p>
@@ -515,32 +606,34 @@ export default function LiquidityPage() {
                     <div className="h-px bg-gradient-to-r from-transparent via-[#2C364F]/20 to-transparent" />
 
                     <div className="grid grid-cols-2 gap-4">
+                      {/* Dynamic Token0 Reserve box (matches lpAmount0) */}
                       <div className={`p-5 rounded-xl border backdrop-blur-sm ${isDark ? "bg-[#1B2236]/50 border-[#2C364F]/30" : "bg-zinc-50/70 border-zinc-200/40"}`}>
                         <div className="flex items-center gap-2 mb-2">
-                          <TokenLogo symbol="WMST" size={18} />
-                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>WMST Reserve</span>
+                          <TokenLogo symbol={token0Info.symbol} size={18} />
+                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>{token0Info.symbol} Reserve</span>
                         </div>
                         <span className="text-xl font-bold block">
-                          {lpAmount0 !== null ? Number(formatUnits(lpAmount0, wmstToken.decimals)).toFixed(4) : "0.0000"}
+                          {lpAmount0 !== null ? Number(formatUnits(lpAmount0, token0Info.decimals)).toFixed(4) : "0.0000"}
                         </span>
                         {lpAmount0 !== null && (
                           <span className={`text-xs font-mono font-bold block mt-1.5 ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
-                            ≈ ${(Number(formatUnits(lpAmount0, wmstToken.decimals)) * liveMstPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ≈ ${(Number(formatUnits(lpAmount0, token0Info.decimals)) * getTokenPrice(token0Info.symbol)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         )}
                       </div>
 
+                      {/* Dynamic Token1 Reserve box (matches lpAmount1) */}
                       <div className={`p-5 rounded-xl border backdrop-blur-sm ${isDark ? "bg-[#1B2236]/50 border-[#2C364F]/30" : "bg-zinc-50/70 border-zinc-200/40"}`}>
                         <div className="flex items-center gap-2 mb-2">
-                          <TokenLogo symbol="USDC" size={18} />
-                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>USDC Reserve</span>
+                          <TokenLogo symbol={token1Info.symbol} size={18} />
+                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>{token1Info.symbol} Reserve</span>
                         </div>
                         <span className="text-xl font-bold block">
-                          {lpAmount1 !== null ? Number(formatUnits(lpAmount1, usdcToken.decimals)).toFixed(4) : "0.0000"}
+                          {lpAmount1 !== null ? Number(formatUnits(lpAmount1, token1Info.decimals)).toFixed(4) : "0.0000"}
                         </span>
                         {lpAmount1 !== null && (
                           <span className={`text-xs font-mono font-bold block mt-1.5 ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
-                            ≈ ${(Number(formatUnits(lpAmount1, usdcToken.decimals)) * 1.0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ≈ ${(Number(formatUnits(lpAmount1, token1Info.decimals)) * getTokenPrice(token1Info.symbol)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         )}
                       </div>
@@ -549,7 +642,9 @@ export default function LiquidityPage() {
                     <div className={`p-4 rounded-lg border ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/20" : "bg-zinc-50/50 border-zinc-200/30"}`}>
                       <div className="flex justify-between items-center mb-2">
                         <span className={`text-xs font-semibold ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Liquidity Amount</span>
-                        <span className="text-sm font-bold text-cyan-400">{lpLiquidity !== null ? lpLiquidity.toString() : "0"}</span>
+                        <span className="text-sm font-bold text-cyan-400">
+                          {lpLiquidity !== null ? Number(formatUnits(lpLiquidity, 18)).toFixed(4) : "0.0000"}
+                        </span>
                       </div>
                       <a
                         href={`https://testnet.mstscan.com/address/${poolAddress}`}
@@ -569,7 +664,7 @@ export default function LiquidityPage() {
                   className={`p-7 rounded-2xl border backdrop-blur-md
                     ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-xl shadow-black/20" : "bg-white/80 border-zinc-200/60 shadow-lg shadow-black/5"}`}
                 >
-                  <h3 className="text-lg font-bold mb-5 flex items-center gap-2">
+                  <h3 className="text-xl font-bold mb-5 flex items-center gap-2">
                     <Plus size={20} className="text-emerald-400" />
                     Add Liquidity to Position
                   </h3>
@@ -636,7 +731,7 @@ export default function LiquidityPage() {
                     className={`p-7 rounded-2xl border backdrop-blur-md
                       ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-xl shadow-black/20" : "bg-white/80 border-zinc-200/60 shadow-lg shadow-black/5"}`}
                   >
-                    <h3 className="text-lg font-bold mb-5">Remove Liquidity</h3>
+                    <h3 className="text-xl font-bold mb-5">Remove Liquidity</h3>
                     
                     <div className="space-y-5">
                       <div>
@@ -680,11 +775,34 @@ export default function LiquidityPage() {
                     className={`p-7 rounded-2xl border backdrop-blur-md flex flex-col justify-between
                       ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-xl shadow-black/20" : "bg-white/80 border-zinc-200/60 shadow-lg shadow-black/5"}`}
                   >
-                    <div>
-                      <h3 className="text-lg font-bold mb-2">LP Fee Rewards</h3>
-                      <p className={`text-xs ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
-                        Accrued fees from swaps within your price range.
-                      </p>
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="text-xl font-bold mb-2">LP Fee Rewards</h3>
+                        <p className={`text-xs ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
+                          Accrued fees from swaps within your price range.
+                        </p>
+                      </div>
+
+                      <div className={`p-4 rounded-xl border space-y-2.5 backdrop-blur-sm ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/20" : "bg-zinc-50/50 border-zinc-200/30"}`}>
+                        <div className="flex justify-between items-center text-xs font-semibold">
+                          <span className={`${isDark ? "text-zinc-400" : "text-zinc-600"} flex items-center gap-1.5`}>
+                            <TokenLogo symbol={token0Info.symbol} size={14} />
+                            {token0Info.symbol} Fees
+                          </span>
+                          <span className="font-mono text-cyan-400">
+                            {tokensOwed0 !== null ? Number(formatUnits(tokensOwed0, token0Info.decimals)).toFixed(6) : "0.000000"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs font-semibold">
+                          <span className={`${isDark ? "text-zinc-400" : "text-zinc-600"} flex items-center gap-1.5`}>
+                            <TokenLogo symbol={token1Info.symbol} size={14} />
+                            {token1Info.symbol} Fees
+                          </span>
+                          <span className="font-mono text-cyan-400">
+                            {tokensOwed1 !== null ? Number(formatUnits(tokensOwed1, token1Info.decimals)).toFixed(6) : "0.000000"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
                     <button
@@ -763,7 +881,7 @@ export default function LiquidityPage() {
 
             <div className="relative z-10">
               <div className="mb-6">
-                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2">
+                <h2 className="text-3xl font-bold mb-2 flex items-center gap-2">
                   <Coins size={24} className="text-cyan-400" />
                   Create Pool
                 </h2>
