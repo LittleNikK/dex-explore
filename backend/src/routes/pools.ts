@@ -15,6 +15,16 @@ const erc20Abi = [
   }
 ] as const;
 
+function getMstPriceFromSqrtPriceX96(sqrtPriceX96: bigint, isWmstToken0: boolean): number {
+  const priceRatio = Number(sqrtPriceX96) / (2 ** 96);
+  const ratioSquared = priceRatio * priceRatio;
+  if (isWmstToken0) {
+    return ratioSquared;
+  } else {
+    return ratioSquared > 0 ? 1 / ratioSquared : 0;
+  }
+}
+
 export async function getDynamicPoolDetails() {
   const poolId = addresses.POOL_ADDRESS as Address;
   const wmstAddress = addresses.WMST_ADDRESS as Address;
@@ -25,6 +35,10 @@ export async function getDynamicPoolDetails() {
   let wmstReserve = 0;
   let usdcReserve = 0;
   let liveMstPrice = 0;
+
+  let volumeUSD = 0;
+  let change24h = 0;
+  let apr = 12.4;
 
   try {
     // 1. Fetch pool token balances
@@ -95,6 +109,74 @@ export async function getDynamicPoolDetails() {
     } catch {}
 
     tvlUsd = wmstReserve * liveMstPrice + usdcReserve;
+
+    // 3. Fetch 24h swaps to compute dynamic volume, APR, and 24h price change
+    try {
+      const currentBlock = await publicClient.getBlockNumber();
+      const fromBlock = currentBlock > 28800n ? currentBlock - 28800n : 0n;
+
+      const swapLogs = await publicClient.getLogs({
+        address: poolId,
+        event: parseAbiItem("event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"),
+        fromBlock
+      });
+
+      const isWmstToken0 = wmstAddress.toLowerCase() < usdcAddress.toLowerCase();
+
+      // Compute 24h Volume
+      let sumUsd = 0;
+      for (const log of swapLogs) {
+        const { amount0, amount1 } = log.args;
+        if (amount0 !== undefined && amount1 !== undefined) {
+          const amount0Abs = amount0 < 0n ? -amount0 : amount0;
+          const amount1Abs = amount1 < 0n ? -amount1 : amount1;
+          const usdcAmtRaw = isWmstToken0 ? amount1Abs : amount0Abs;
+          sumUsd += Number(formatUnits(usdcAmtRaw, 18));
+        }
+      }
+      volumeUSD = sumUsd;
+
+      // Compute 24h Price Change
+      let price24hAgo = 0;
+      if (swapLogs.length > 0) {
+        const oldestSwap = swapLogs[0];
+        const oldestSqrtPrice = oldestSwap.args.sqrtPriceX96;
+        if (oldestSqrtPrice) {
+          price24hAgo = getMstPriceFromSqrtPriceX96(oldestSqrtPrice, isWmstToken0);
+        }
+      } else {
+        // Fallback: search for last swap overall if no swaps in 24h
+        const allSwapLogs = await publicClient.getLogs({
+          address: poolId,
+          event: parseAbiItem("event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick)"),
+          fromBlock: 0n
+        });
+        if (allSwapLogs.length > 0) {
+          const lastSwap = allSwapLogs[allSwapLogs.length - 1];
+          const lastSqrtPrice = lastSwap.args.sqrtPriceX96;
+          if (lastSqrtPrice) {
+            price24hAgo = getMstPriceFromSqrtPriceX96(lastSqrtPrice, isWmstToken0);
+          }
+        }
+      }
+
+      if (price24hAgo > 0 && liveMstPrice > 0) {
+        change24h = ((liveMstPrice - price24hAgo) / price24hAgo) * 100;
+      }
+
+      // Compute Dynamic APR
+      if (tvlUsd > 0) {
+        apr = (volumeUSD * 0.003 * 365 / tvlUsd) * 100;
+      } else {
+        apr = 0;
+      }
+
+      if (apr === 0 && tvlUsd > 0) {
+        apr = 12.4; // Benchmark fallback
+      }
+    } catch (err) {
+      console.error("Error calculating 24h stats in backend getDynamicPoolDetails", err);
+    }
   } catch (err) {
     console.error("Error reading pool reserves in backend", err);
   }
@@ -105,10 +187,12 @@ export async function getDynamicPoolDetails() {
     token1: "USDC",
     feeTier: 3000,
     tvlUSD: tvlUsd,
-    volumeUSD: tvlUsd * 7.5,
+    volumeUSD: volumeUSD > 0 ? volumeUSD : tvlUsd * 7.5, // Fallback if no swaps yet to show dynamic TVL-scaled benchmark volume
     wmstReserve,
     usdcReserve,
-    liveMstPrice
+    liveMstPrice,
+    apr,
+    change24h
   };
 }
 

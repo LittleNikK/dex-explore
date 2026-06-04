@@ -3,7 +3,7 @@
 export function getSqrtRatioAtTick(tick: number): bigint {
   const ratio = Math.pow(1.0001, tick);
   const sqrtRatio = Math.sqrt(ratio);
-  const q96 = 79228162514264337593543950336n; // 2^96
+  const q96 = 2n ** 96n; // 2^96
   return BigInt(Math.floor(sqrtRatio * Number(q96)));
 }
 
@@ -15,7 +15,7 @@ export function getAmountsForLiquidity(
 ): [bigint, bigint] {
   if (liquidity === 0n || sqrtPriceX96 === 0n) return [0n, 0n];
 
-  const q96 = 79228162514264337593543950336n;
+  const q96 = 2n ** 96n;
   let sqrtPriceLower = getSqrtRatioAtTick(tickLower);
   let sqrtPriceUpper = getSqrtRatioAtTick(tickUpper);
 

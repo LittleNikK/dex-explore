@@ -54,7 +54,7 @@ tokensRouter.get("/", async (_req, res) => {
         name: "tMST Native Token",
         decimals: 18,
         priceUsd: liveMstPrice,
-        change24h: 1.25,
+        change24h: poolDetails.change24h || 0.0,
         volume24h: poolDetails.volumeUSD * 0.6,
         tvl: wmstTvl
       },
@@ -64,7 +64,7 @@ tokensRouter.get("/", async (_req, res) => {
         name: "Wrapped MST",
         decimals: wmstDecimals,
         priceUsd: liveMstPrice,
-        change24h: 1.25,
+        change24h: poolDetails.change24h || 0.0,
         volume24h: poolDetails.volumeUSD * 0.4,
         tvl: wmstTvl
       },
@@ -74,7 +74,7 @@ tokensRouter.get("/", async (_req, res) => {
         name: "USD Coin",
         decimals: usdcDecimals,
         priceUsd: 1.0,
-        change24h: 0.01,
+        change24h: 0.0,
         volume24h: poolDetails.volumeUSD,
         tvl: usdcTvl
       }

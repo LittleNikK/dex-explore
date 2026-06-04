@@ -54,7 +54,7 @@ export async function topPools(): Promise<MockPool[]> {
       feeTier: p.feeTier,
       tvl: p.tvlUSD,
       volume24h: p.volumeUSD,
-      apr: 12.4
+      apr: p.apr !== undefined ? p.apr : 12.4
     }));
   } catch (err) {
     console.error("Error fetching pools from backend", err);

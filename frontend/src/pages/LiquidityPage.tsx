@@ -399,7 +399,7 @@ export default function LiquidityPage() {
       const amount1Float = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? Number(initWmst) : Number(initUsdc);
       const priceRatio = amount1Float / amount0Float;
       const sqrtPrice = Math.sqrt(priceRatio);
-      const Q96 = 79228162514264337593543950336n;
+      const Q96 = 2n ** 96n;
       const dynamicSqrtPriceX96 = BigInt(Math.floor(sqrtPrice * 1000000000000)) * Q96 / 1000000000000n;
 
       const initHash = await writeContractAsync({
