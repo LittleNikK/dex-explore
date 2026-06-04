@@ -1123,7 +1123,7 @@ export default function LiquidityPage() {
                   <Info size={16} className="text-cyan-400 shrink-0 mt-0.5" />
                   <div>
                     <p className={`font-bold mb-1 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Price Initialization</p>
-                    Deploys at 1:1 ratio. Full-range concentrated position enabled by default.
+                    Deploys at your input token ratio dynamically. Full-range concentrated position enabled by default.
                   </div>
                 </div>
 
