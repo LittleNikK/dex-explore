@@ -54,6 +54,30 @@ export default function ExplorePage() {
     queryClient.invalidateQueries({ queryKey: ["txs"] });
   });
 
+  const { data: pools } = useQuery({ queryKey: ["pools"], queryFn: () => topPools(), staleTime: 30_000 });
+
+  const stats = useMemo(() => {
+    if (!pools || pools.length === 0) {
+      return {
+        tvl: "$0.00",
+        volume: "$0.00",
+        fees: "$0.00",
+        pairs: "0"
+      };
+    }
+    const totalTvl = pools.reduce((sum, p) => sum + (p.tvl || 0), 0);
+    const totalVolume = pools.reduce((sum, p) => sum + (p.volume24h || 0), 0);
+    const totalFees = totalVolume * 0.003; // 0.3% fee tier
+    const pairCount = pools.length;
+
+    return {
+      tvl: totalTvl >= 1e6 ? `$${(totalTvl / 1e6).toFixed(2)}M` : `$${totalTvl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+      volume: totalVolume >= 1e6 ? `$${(totalVolume / 1e6).toFixed(2)}M` : `$${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+      fees: totalFees >= 1e6 ? `$${(totalFees / 1e6).toFixed(2)}M` : `$${totalFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+      pairs: pairCount.toLocaleString()
+    };
+  }, [pools]);
+
   async function handleExplore() {
     setErrorMsg(null);
     setTokenBalances([]);
@@ -168,10 +192,10 @@ export default function ExplorePage() {
 
       {/* Hero Stats */}
       <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Hero label="TVL" value="$8.94B" delta={2.4} />
-        <Hero label="24h Volume" value="$1.42B" delta={-1.1} />
-        <Hero label="24h Fees" value="$4.26M" delta={0.6} />
-        <Hero label="Active pairs" value="12,348" delta={3.2} />
+        <Hero label="TVL" value={stats.tvl} delta={2.4} />
+        <Hero label="24h Volume" value={stats.volume} delta={-1.1} />
+        <Hero label="24h Fees" value={stats.fees} delta={0.6} />
+        <Hero label="Active pairs" value={stats.pairs} delta={3.2} />
       </div>
 
       {/* Tabs and Ranges Selection */}

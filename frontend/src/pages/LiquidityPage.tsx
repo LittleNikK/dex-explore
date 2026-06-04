@@ -394,12 +394,19 @@ export default function LiquidityPage() {
 
       // Step B: Call createAndInitializePoolIfNecessary
       setStatusText("Initializing Uniswap V3 Pool in wallet...");
-      const SQRT_PRICE_1_TO_1 = 79228162514264337593543950336n;
+      // Calculate initial pool price ratio dynamically based on user's input amounts
+      const amount0Float = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? Number(initWmst) : Number(initUsdc);
+      const amount1Float = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? Number(initWmst) : Number(initUsdc);
+      const priceRatio = amount1Float / amount0Float;
+      const sqrtPrice = Math.sqrt(priceRatio);
+      const Q96 = 79228162514264337593543950336n;
+      const dynamicSqrtPriceX96 = BigInt(Math.floor(sqrtPrice * 1000000000000)) * Q96 / 1000000000000n;
+
       const initHash = await writeContractAsync({
         address: CONTRACTS.positionManager,
         abi: nonfungiblePositionManagerAbi,
         functionName: "createAndInitializePoolIfNecessary",
-        args: [t0, t1, initFee, SQRT_PRICE_1_TO_1]
+        args: [t0, t1, initFee, dynamicSqrtPriceX96]
       });
 
       setStatusText("Waiting for pool initialization confirmation...");
