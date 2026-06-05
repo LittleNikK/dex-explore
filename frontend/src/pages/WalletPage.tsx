@@ -31,7 +31,7 @@ export default function WalletPage() {
             <Wallet size={22} />
           </div>
           <h1 className="text-5xl font-display font-extrabold uppercase tracking-wide">Connect MetaMask</h1>
-          <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400 font-medium">
+          <p className="mt-3 max-w-xl text-base leading-6 text-zinc-600 dark:text-zinc-400 font-medium">
             Connect your wallet to MSWAP, confirm you are on MST Testnet, then continue to swaps and liquidity.
           </p>
         </div>
@@ -40,7 +40,7 @@ export default function WalletPage() {
           <div className="mb-5 flex items-center justify-between">
             <div>
               <h2 className="text-xl font-display font-bold text-zinc-950 dark:text-white tracking-wide">Wallet Hub</h2>
-              <p className="text-xs font-bold font-mono text-zinc-500 mt-0.5">{isConnected ? connector?.name ?? "Connected" : "Not connected"}</p>
+              <p className="text-sm font-bold font-mono text-zinc-500 mt-0.5">{isConnected ? connector?.name ?? "Connected" : "Not connected"}</p>
             </div>
             <span className={`h-3 w-3 rounded-full shadow-lg ${isConnected ? "bg-emerald-400" : "bg-zinc-700"}`} />
           </div>
@@ -48,21 +48,21 @@ export default function WalletPage() {
           {isConnected && address ? (
             <div className="space-y-4">
               <div className="rounded-2xl bg-zinc-50/60 dark:bg-white/5 p-4 border border-zinc-200/40 dark:border-none">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
+                <div className="text-xs font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
                 <div className="mt-1 font-mono text-base font-bold text-zinc-950 dark:text-white tracking-wide">{shortenAddress(address)}</div>
               </div>
 
               <div className="flex items-center gap-3 rounded-2xl bg-zinc-50/60 dark:bg-white/5 p-4 border border-zinc-200/40 dark:border-none">
                 {onMstChain ? <CheckCircle2 className="text-emerald-400 shrink-0" size={20} /> : <AlertCircle className="text-amber-400 shrink-0" size={20} />}
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-bold text-zinc-950 dark:text-white uppercase tracking-wider font-mono">{onMstChain ? "MST Testnet connected" : "Wrong network"}</div>
-                  <div className="text-xs font-bold font-mono text-zinc-500 mt-1">Current chain ID: {chainId}</div>
+                  <div className="text-sm font-bold text-zinc-950 dark:text-white uppercase tracking-wider font-mono">{onMstChain ? "MST Testnet connected" : "Wrong network"}</div>
+                  <div className="text-sm font-bold font-mono text-zinc-500 mt-1">Current chain ID: {chainId}</div>
                 </div>
               </div>
 
               {!onMstChain && (
                 <button
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3 text-sm font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3.5 text-base font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={isSwitching}
                   onClick={() => switchChain({ chainId: mstChain.id })}
                 >
@@ -72,7 +72,7 @@ export default function WalletPage() {
               )}
 
               <button
-                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 dark:border-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-750 bg-zinc-50 dark:bg-white/5 px-4 py-3 text-sm font-display font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/10 active:scale-[0.98] transition-all"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 dark:border-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-750 bg-zinc-50 dark:bg-white/5 px-4 py-3.5 text-base font-display font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/10 active:scale-[0.98] transition-all"
                 onClick={() => disconnect()}
               >
                 <Power size={18} />
@@ -82,7 +82,7 @@ export default function WalletPage() {
           ) : (
             <div className="space-y-4">
               <button
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3 text-sm font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3.5 text-base font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={!metaMaskConnector || isPending}
                 onClick={() => metaMaskConnector && connect({ connector: metaMaskConnector })}
               >
@@ -92,7 +92,7 @@ export default function WalletPage() {
 
               {!metaMaskConnector && (
                 <a
-                  className="flex items-center justify-center gap-2 rounded-2xl border border-zinc-200 dark:border-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-750 bg-zinc-50 dark:bg-white/5 px-4 py-3 text-sm font-display font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/10 active:scale-[0.98] transition-all text-center"
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-zinc-200 dark:border-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-750 bg-zinc-50 dark:bg-white/5 px-4 py-3.5 text-base font-display font-bold text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-white/10 active:scale-[0.98] transition-all text-center"
                   href="https://metamask.io/download/"
                   rel="noreferrer"
                   target="_blank"
@@ -102,7 +102,7 @@ export default function WalletPage() {
                 </a>
               )}
 
-              {error && <p className="rounded-2xl bg-red-500/10 p-3 text-xs font-mono font-bold text-red-300 border-none">{error.message}</p>}
+              {error && <p className="rounded-2xl bg-red-500/10 p-3 text-sm font-mono font-bold text-red-300 border-none">{error.message}</p>}
             </div>
           )}
         </div>

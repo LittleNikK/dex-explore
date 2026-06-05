@@ -102,7 +102,7 @@ function Navigation() {
               <Link
                 key={link.to}
                 to={link.to}
-                className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.16em] transition duration-200
+                className={`rounded-full px-4.5 py-2 text-xs font-extrabold uppercase tracking-[0.16em] transition duration-200
                   ${isActive 
                     ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_28px_-22px_rgba(34,211,238,0.7)] border border-cyan-500/10" 
                     : isDark 
@@ -120,7 +120,7 @@ function Navigation() {
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={handleWalletClick}
-              className="flex h-9 items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 text-[10px] font-extrabold uppercase tracking-[0.12em] text-white hover:brightness-110 active:scale-[0.98] transition-all shadow-md"
+              className="flex h-10 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-5 text-xs font-extrabold uppercase tracking-[0.12em] text-white hover:brightness-110 active:scale-[0.98] transition-all shadow-md"
             >
               {isConnected && address ? (
                 <>
@@ -129,7 +129,7 @@ function Navigation() {
                 </>
               ) : (
                 <>
-                  <Wallet size={12} />
+                  <Wallet size={13} />
                   Connect Wallet
                 </>
               )}
@@ -150,8 +150,8 @@ function Navigation() {
                 >
                   <div className="mb-4 flex items-center justify-between">
                     <div>
-                      <h2 className="text-sm font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
-                      <p className="text-[10px] font-bold font-mono text-zinc-500 mt-0.5">
+                      <h2 className="text-base font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
+                      <p className="text-xs font-bold font-mono text-zinc-500 mt-0.5">
                         {connector?.name ?? "MetaMask"}
                       </p>
                     </div>
@@ -160,8 +160,8 @@ function Navigation() {
 
                   <div className="space-y-4">
                     <div className={`rounded-2xl p-3 border ${isDark ? "bg-white/5 border-white/5" : "bg-zinc-50 border-zinc-200/40"}`}>
-                      <div className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
-                      <div className="mt-1 font-mono text-xs font-bold tracking-wide break-all">
+                      <div className="text-xs font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
+                      <div className="mt-1.5 font-mono text-sm font-bold tracking-wide break-all">
                         {address}
                       </div>
                     </div>
@@ -173,10 +173,10 @@ function Navigation() {
                         <AlertCircle className="text-amber-400 shrink-0" size={16} />
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="text-[10px] font-bold uppercase tracking-wider font-mono">
+                        <div className="text-xs font-bold uppercase tracking-wider font-mono">
                           {onMstChain ? "MST Testnet connected" : "Wrong network"}
                         </div>
-                        <div className="text-[9px] font-bold font-mono text-zinc-500 mt-0.5">
+                        <div className="text-xs font-bold font-mono text-zinc-500 mt-0.5">
                           Current chain ID: {chainId}
                         </div>
                       </div>
@@ -253,7 +253,7 @@ function Navigation() {
                     key={link.to}
                     to={link.to}
                     onClick={() => setIsOpen(false)}
-                    className={`rounded-2xl px-4 py-2.5 text-xs font-extrabold uppercase tracking-[0.16em] transition duration-200
+                    className={`rounded-2xl px-4 py-2.5 text-sm font-extrabold uppercase tracking-[0.16em] transition duration-200
                       ${isActive ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/10" : isDark ? "text-zinc-300 hover:bg-white/5" : "text-zinc-700 hover:bg-slate-100"}`}
                   >
                     {link.label}
@@ -263,7 +263,7 @@ function Navigation() {
 
               <button
                 onClick={handleWalletClick}
-                className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 py-3 text-xs font-extrabold uppercase tracking-wider text-white hover:brightness-110 active:scale-[0.98] transition-all"
+                className="mt-2 flex w-full items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 py-3.5 text-sm font-extrabold uppercase tracking-wider text-white hover:brightness-110 active:scale-[0.98] transition-all"
               >
                 {isConnected && address ? (
                   <>
@@ -291,8 +291,8 @@ function Navigation() {
                   >
                     <div className="mb-3 flex items-center justify-between">
                       <div>
-                        <h2 className="text-xs font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
-                        <p className="text-[9px] font-bold font-mono text-zinc-500 mt-0.5">
+                        <h2 className="text-sm font-display font-extrabold uppercase tracking-wider">Wallet Hub</h2>
+                        <p className="text-xs font-bold font-mono text-zinc-500 mt-0.5">
                           {connector?.name ?? "MetaMask"}
                         </p>
                       </div>
@@ -301,8 +301,8 @@ function Navigation() {
 
                     <div className="space-y-3">
                       <div className={`rounded-xl p-2.5 border ${isDark ? "bg-white/5 border-white/5" : "bg-white border-zinc-200/50"}`}>
-                        <div className="text-[8px] font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
-                        <div className="mt-0.5 font-mono text-[11px] font-bold tracking-wide break-all">
+                        <div className="text-xs font-bold uppercase tracking-wider text-zinc-500 font-mono">Address</div>
+                        <div className="mt-1 font-mono text-xs font-bold tracking-wide break-all">
                           {address}
                         </div>
                       </div>
@@ -314,10 +314,10 @@ function Navigation() {
                           <AlertCircle className="text-amber-400 shrink-0" size={14} />
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="text-[9px] font-bold uppercase tracking-wider font-mono">
+                          <div className="text-xs font-bold uppercase tracking-wider font-mono">
                             {onMstChain ? "MST Testnet connected" : "Wrong network"}
                           </div>
-                          <div className="text-[8px] font-bold font-mono text-zinc-500 mt-0.5">
+                          <div className="text-xs font-bold font-mono text-zinc-500 mt-0.5">
                             Current chain ID: {chainId}
                           </div>
                         </div>

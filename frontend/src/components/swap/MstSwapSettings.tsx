@@ -93,21 +93,21 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
             }`}
         >
           {/* Title */}
-          <div className="text-xs font-bold uppercase tracking-wider mb-4 opacity-70">
+          <div className="text-sm font-bold uppercase tracking-wider mb-4 opacity-70">
             MSWAP Settings
           </div>
 
           {/* Slippage tolerance */}
           <div className="space-y-2 mb-4">
-            <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <div className="flex items-center gap-1.5 text-base font-semibold">
               <span>Slippage tolerance</span>
-              <HelpCircle size={14} className="opacity-40 cursor-help" />
+              <HelpCircle size={15} className="opacity-40 cursor-help" />
             </div>
 
             <div className="flex gap-2">
               <button
                 onClick={handleAuto}
-                className={`flex-1 py-2 px-3 rounded-[12px] font-bold text-xs border transition-all duration-150
+                className={`flex-1 py-2 px-3 rounded-[12px] font-bold text-sm border transition-all duration-150
                   ${
                     isAuto
                       ? "bg-[#FB118E] border-[#FB118E] text-white"
@@ -125,7 +125,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                   <button
                     key={val}
                     onClick={() => handlePreset(val)}
-                    className={`py-2 px-3.5 rounded-[12px] font-bold text-xs border transition-all duration-150
+                    className={`py-2 px-3.5 rounded-[12px] font-bold text-sm border transition-all duration-150
                       ${
                         isSelected
                           ? "bg-[#FB118E] border-[#FB118E] text-white"
@@ -145,7 +145,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                   placeholder={isAuto ? "0.50" : slippagePercent}
                   value={customVal}
                   onChange={(e) => handleCustomChange(e.target.value)}
-                  className={`w-full py-2 pl-2.5 pr-6 rounded-[12px] outline-none text-xs font-bold text-right border transition-all duration-150
+                  className={`w-full py-2 pl-2.5 pr-6 rounded-[12px] outline-none text-sm font-bold text-right border transition-all duration-150
                     ${
                       !isAuto && customVal !== ""
                         ? "border-[#FB118E] text-[#FB118E] bg-transparent"
@@ -154,7 +154,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                         : "bg-[#F5F6FC] border-zinc-200 text-zinc-800 placeholder-zinc-400"
                     }`}
                 />
-                <span className="absolute right-2.5 text-xs font-bold opacity-45 pointer-events-none">
+                <span className="absolute right-2.5 text-sm font-bold opacity-45 pointer-events-none">
                   %
                 </span>
               </div>
@@ -162,7 +162,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
             {/* Custom slippage warnings */}
             {!isAuto && (slippage < 50 || slippage > 500) && (
-              <div className="text-[11px] font-medium text-amber-500 leading-snug pt-1">
+              <div className="text-xs font-medium text-amber-500 leading-snug pt-1">
                 {slippage < 50
                   ? "Slippage is low. Your transaction may revert."
                   : "Slippage is high. Your transaction may be frontrun."}
@@ -172,9 +172,9 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
           {/* Deadline */}
           <div className="flex items-center justify-between mb-5">
-            <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <div className="flex items-center gap-1.5 text-base font-semibold">
               <span>Transaction deadline</span>
-              <HelpCircle size={14} className="opacity-40 cursor-help" />
+              <HelpCircle size={15} className="opacity-40 cursor-help" />
             </div>
 
             <div className="flex items-center gap-2">
@@ -187,14 +187,14 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                     setDeadlineMins(val === "" ? 0 : Number(val));
                   }
                 }}
-                className={`w-16 py-2 px-3 rounded-[12px] outline-none text-xs font-bold text-center border transition-all duration-150
+                className={`w-16 py-2 px-3 rounded-[12px] outline-none text-sm font-bold text-center border transition-all duration-150
                   ${
                     isDark
                       ? "bg-[#1B2236] border-[#2C364F] text-white"
                       : "bg-[#F5F6FC] border-zinc-200 text-zinc-800"
                   }`}
               />
-              <span className="text-xs font-semibold opacity-60">minutes</span>
+              <span className="text-sm font-semibold opacity-60">minutes</span>
             </div>
           </div>
 
@@ -203,13 +203,13 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
           {/* Settings Switches */}
           <div className="space-y-4">
-            <div className="text-xs font-bold uppercase tracking-wider opacity-70">
+            <div className="text-sm font-bold uppercase tracking-wider opacity-70">
               Interface Settings
             </div>
 
             {/* Router */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold leading-normal">MSWAP Router API</span>
+              <span className="text-sm font-bold leading-normal">MSWAP Router API</span>
               <button
                 onClick={() => setUseRouterApi(!useRouterApi)}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none
@@ -224,7 +224,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
 
             {/* L2 Optimizations */}
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold leading-normal">MSWAP Gas Optimizations</span>
+              <span className="text-sm font-bold leading-normal">MSWAP Gas Optimizations</span>
               <button
                 onClick={() => setL2Toggle(!l2Toggle)}
                 className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none

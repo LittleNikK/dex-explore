@@ -839,13 +839,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   )}
 
                   <div className="flex justify-between items-center mb-2">
-                    <span className={`text-xs font-semibold uppercase tracking-wider ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
+                    <span className={`text-sm font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
                       You pay
                     </span>
                     {isConnected && (
-                      <div className={`flex items-center gap-1 text-[11px] font-bold font-mono ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>
+                      <div className={`flex items-center gap-1 text-xs font-bold font-mono ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>
                         <span>Balance:</span>
-                        <NumberTicker value={balanceIn} className={`font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`} />
+                        <NumberTicker value={balanceIn} className={`font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`} />
                       </div>
                     )}
                   </div>
@@ -870,20 +870,20 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                     <button
                       ref={tokenInMagneticRef}
                       onClick={() => setModalOpen("in")}
-                      className={`flex items-center gap-2 py-2 pl-2.5 pr-4 rounded-full shadow-lg border font-display font-bold text-base transition-colors duration-150 relative z-10
+                      className={`flex items-center gap-2 py-2.5 pl-3.5 pr-5 rounded-full shadow-lg border font-display font-bold text-lg transition-colors duration-150 relative z-10
                         ${isDark
                           ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
                           : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                         }`}
                     >
-                      <TokenLogo symbol={tokenIn} size={24} />
+                      <TokenLogo symbol={tokenIn} size={26} />
                       <span>{displayTokenSymbol(tokenIn)}</span>
-                      <ChevronDown size={14} className="opacity-60" />
+                      <ChevronDown size={15} className="opacity-60" />
                     </button>
                   </div>
 
                   {amountIn && (
-                    <div className="text-[11px] mt-2 font-mono font-bold text-zinc-500">
+                    <div className="text-xs mt-2 font-mono font-bold text-zinc-500">
                       ≈ {(Number(amountIn) * getTokenPrice(tokenIn)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC
                     </div>
                   )}
@@ -915,13 +915,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   )}
 
                   <div className="flex justify-between items-center mb-2">
-                    <span className={`text-xs font-semibold uppercase tracking-wider ${isDark ? "text-zinc-500" : "text-zinc-400"}`}>
+                    <span className={`text-sm font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
                       You receive
                     </span>
                     {isConnected && (
-                      <div className={`flex items-center gap-1 text-[11px] font-bold font-mono ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>
+                      <div className={`flex items-center gap-1 text-xs font-bold font-mono ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>
                         <span>Balance:</span>
-                        <NumberTicker value={balanceOut} className={`font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`} />
+                        <NumberTicker value={balanceOut} className={`font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`} />
                       </div>
                     )}
                   </div>
@@ -941,20 +941,20 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                     <button
                       ref={tokenOutMagneticRef}
                       onClick={() => setModalOpen("out")}
-                      className={`flex items-center gap-2 py-2 pl-2.5 pr-4 rounded-full shadow-lg border font-display font-bold text-base transition-colors duration-150 relative z-10
+                      className={`flex items-center gap-2 py-2.5 pl-3.5 pr-5 rounded-full shadow-lg border font-display font-bold text-lg transition-colors duration-150 relative z-10
                         ${isDark
                           ? "bg-[#181930] border-zinc-800/80 hover:bg-zinc-800 text-white"
                           : "bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-950"
                         }`}
                     >
-                      <TokenLogo symbol={tokenOut} size={24} />
+                      <TokenLogo symbol={tokenOut} size={26} />
                       <span>{displayTokenSymbol(tokenOut)}</span>
-                      <ChevronDown size={14} className="opacity-60" />
+                      <ChevronDown size={15} className="opacity-60" />
                     </button>
                   </div>
 
                   {amountOut && (
-                    <div className="text-[11px] mt-2 font-mono font-bold text-zinc-500">
+                    <div className="text-xs mt-2 font-mono font-bold text-zinc-500">
                       ≈ {(Number(amountOut) * getTokenPrice(tokenOut)).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })} USDC
                     </div>
                   )}
@@ -1004,11 +1004,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             animate={{ opacity: 1, y: 0 }}
             className="mt-4 flex items-center justify-between px-1"
           >
-            <span className={`text-[11px] font-bold font-mono ${isDark ? "text-zinc-500" : "text-zinc-400"} flex items-center gap-1.5`}>
+            <span className={`text-xs font-bold font-mono ${isDark ? "text-zinc-400" : "text-zinc-500"} flex items-center gap-1.5`}>
               <Info size={12} className="opacity-70 text-cyan-400" />
               {exchangeRateString}
             </span>
-            <span className={`text-[11px] font-bold font-mono ${isDark ? "text-zinc-600" : "text-zinc-400"}`}>
+            <span className={`text-xs font-bold font-mono ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
               Concentrated Pool Fee: 0.3%
             </span>
           </motion.div>
@@ -1019,14 +1019,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           ref={buttonMagneticRef}
           onClick={handleSwap}
           disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0))}
-          className={`w-full mt-5 py-4.5 font-display font-bold text-base tracking-wider transition-all duration-300 relative overflow-hidden group border-none shadow-none bg-transparent select-none outline-none
+          className={`w-full mt-5 py-4.5 font-display font-bold text-lg tracking-wider transition-all duration-300 relative overflow-hidden group border-none shadow-none bg-transparent select-none outline-none
             ${!isConnected
               ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 active:scale-[0.98]"
               : isWorking
                 ? "text-zinc-500 dark:text-zinc-600 cursor-not-allowed"
                 : !amountIn || Number(amountIn) <= 0
                   ? "text-zinc-400 dark:text-zinc-700 cursor-not-allowed"
-                  : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-lg transition-all duration-300 active:scale-[0.98]"
+                  : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-xl transition-all duration-300 active:scale-[0.98]"
             }`}
           style={{
             textShadow: (!isConnected || (!amountIn || Number(amountIn) <= 0) || isWorking)
@@ -1040,7 +1040,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           {isWorking ? (
             <div className="flex items-center justify-center gap-2">
               <Loader2 className="animate-spin h-5 w-5 text-cyan-400" />
-              <span className="font-mono text-xs">{buttonLabel}</span>
+              <span className="font-mono text-sm">{buttonLabel}</span>
             </div>
           ) : (
             <div className="flex items-center justify-center gap-1.5">
@@ -1060,7 +1060,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
               className="overflow-hidden mt-4"
             >
               <div
-                className={`p-3.5 rounded-2xl border text-xs font-semibold leading-relaxed font-mono
+                className={`p-3.5 rounded-2xl border text-sm font-semibold leading-relaxed font-mono
                   ${statusText === "Swap confirmed!"
                     ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
                     : "bg-[#141526]/50 border-zinc-800/60 text-zinc-400"
@@ -1074,14 +1074,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   {statusText === "Swap confirmed!" && (
                     <button
                       onClick={() => setStatusText("")}
-                      className="underline text-[10px] font-bold text-cyan-400 hover:text-cyan-300"
+                      className="underline text-xs font-bold text-cyan-400 hover:text-cyan-300"
                     >
                       Clear
                     </button>
                   )}
                 </div>
                 {txHash && (
-                  <div className="mt-2 pt-2 border-t border-zinc-800/40 font-mono text-[9px] break-all opacity-80 flex items-center justify-between gap-2">
+                  <div className="mt-2 pt-2 border-t border-zinc-800/40 font-mono text-xs break-all opacity-80 flex items-center justify-between gap-2">
                     <span className="truncate">TX: {txHash}</span>
                     <a
                       href={`https://testnet.mstscan.com/tx/${txHash}`}

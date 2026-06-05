@@ -97,7 +97,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
           >
             {/* Header */}
             <div className="flex items-center justify-between p-5 pb-4">
-              <span className="font-semibold text-base leading-none">Select a token</span>
+              <span className="font-bold text-lg leading-none">Select a token</span>
               <button
                 onClick={onClose}
                 className={`p-1.5 rounded-xl transition-colors duration-150
@@ -125,7 +125,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
                   autoComplete="off"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className={`w-full py-3.5 pl-11 pr-4 rounded-[16px] outline-none text-[15px] font-medium border transition-all duration-150
+                  className={`w-full py-3.5 pl-11 pr-4 rounded-[16px] outline-none text-base font-semibold border transition-all duration-150
                     ${
                       isDark
                         ? "bg-[#1B2236] border-[#2C364F] text-white placeholder-zinc-500 focus:border-[#FB118E]"
@@ -149,7 +149,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
                         onSelect(symbol);
                         onClose();
                       }}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] border text-xs font-semibold tracking-wide transition-all duration-150
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] border text-sm font-semibold tracking-wide transition-all duration-150
                         ${
                           isSelected
                             ? isDark
@@ -202,17 +202,17 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
                         <TokenLogo symbol={token.symbol} size={36} className="shrink-0" />
                         <div>
                           <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-[15px] leading-tight">
+                            <span className="font-bold text-base leading-tight">
                               {displayTokenSymbol(token.symbol)}
                             </span>
                             {isSelected && (
-                              <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+                              <span className="text-xs uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-200 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
                                 Active
                               </span>
                             )}
                           </div>
                           <span
-                            className={`text-xs ${isDark ? "text-zinc-400" : "text-zinc-500"}`}
+                            className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-500"}`}
                           >
                             {token.name}
                           </span>

@@ -712,14 +712,14 @@ export default function LiquidityPage() {
                   <div className="relative z-10 flex flex-col gap-6">
                     <div className="flex justify-between items-start">
                       <div>
-                        <span className={`inline-block text-[11px] font-bold py-1.5 px-3 rounded-lg mb-2 ${isDark ? "bg-cyan-500/15 text-cyan-400" : "bg-cyan-500/10 text-cyan-600"}`}>
+                        <span className={`inline-block text-xs font-bold py-1.5 px-3 rounded-lg mb-2 ${isDark ? "bg-cyan-500/15 text-cyan-400" : "bg-cyan-500/10 text-cyan-600"}`}>
                           NFT Token ID #{activeTokenId.toString()}
                         </span>
-                        <h3 className="text-xl font-bold">Your Concentrated Position</h3>
+                        <h3 className="text-2xl font-black">Your Concentrated Position</h3>
                       </div>
                       <div className="text-right">
-                        <p className={`text-xs ${isDark ? "text-zinc-500" : "text-zinc-600"} mb-1`}>Active Range</p>
-                        <p className="text-xs font-mono font-bold">{initTickLower} → {initTickUpper}</p>
+                        <p className={`text-xs ${isDark ? "text-zinc-400" : "text-zinc-600"} mb-1`}>Active Range</p>
+                        <p className="text-sm font-mono font-bold">{initTickLower} → {initTickUpper}</p>
                       </div>
                     </div>
 
@@ -729,10 +729,10 @@ export default function LiquidityPage() {
                       {/* Dynamic Token0 Reserve box (matches lpAmount0) */}
                       <div className={`p-5 rounded-xl border backdrop-blur-sm ${isDark ? "bg-[#1B2236]/50 border-[#2C364F]/30" : "bg-zinc-50/70 border-zinc-200/40"}`}>
                         <div className="flex items-center gap-2 mb-2">
-                          <TokenLogo symbol={token0Info.symbol} size={18} />
-                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>{token0Info.symbol} Reserve</span>
+                          <TokenLogo symbol={token0Info.symbol} size={20} />
+                          <span className={`text-sm font-semibold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{token0Info.symbol} Reserve</span>
                         </div>
-                        <span className="text-xl font-bold block">
+                        <span className="text-2xl font-black block">
                           {lpAmount0 !== null ? Number(formatUnits(lpAmount0, token0Info.decimals)).toFixed(4) : "0.0000"}
                         </span>
                         {lpAmount0 !== null && (
@@ -745,10 +745,10 @@ export default function LiquidityPage() {
                       {/* Dynamic Token1 Reserve box (matches lpAmount1) */}
                       <div className={`p-5 rounded-xl border backdrop-blur-sm ${isDark ? "bg-[#1B2236]/50 border-[#2C364F]/30" : "bg-zinc-50/70 border-zinc-200/40"}`}>
                         <div className="flex items-center gap-2 mb-2">
-                          <TokenLogo symbol={token1Info.symbol} size={18} />
-                          <span className={`text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>{token1Info.symbol} Reserve</span>
+                          <TokenLogo symbol={token1Info.symbol} size={20} />
+                          <span className={`text-sm font-semibold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{token1Info.symbol} Reserve</span>
                         </div>
-                        <span className="text-xl font-bold block">
+                        <span className="text-2xl font-black block">
                           {lpAmount1 !== null ? Number(formatUnits(lpAmount1, token1Info.decimals)).toFixed(4) : "0.0000"}
                         </span>
                         {lpAmount1 !== null && (
@@ -761,8 +761,8 @@ export default function LiquidityPage() {
 
                     <div className={`p-4 rounded-lg border ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/20" : "bg-zinc-50/50 border-zinc-200/30"}`}>
                       <div className="flex justify-between items-center mb-2">
-                        <span className={`text-xs font-semibold ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Liquidity Amount</span>
-                        <span className="text-sm font-bold text-cyan-400">
+                        <span className={`text-sm font-semibold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Liquidity Amount</span>
+                        <span className="text-base font-bold text-cyan-400">
                           {lpLiquidity !== null ? Number(formatUnits(lpLiquidity, 18)).toFixed(4) : "0.0000"}
                         </span>
                       </div>
@@ -770,10 +770,10 @@ export default function LiquidityPage() {
                         href={`https://testnet.mstscan.com/address/${poolAddress}`}
                         target="_blank"
                         rel="noreferrer"
-                        className={`text-xs font-mono underline flex items-center gap-1.5 ${isDark ? "text-zinc-500 hover:text-cyan-400" : "text-zinc-600 hover:text-cyan-600"}`}
+                        className={`text-sm font-mono underline flex items-center gap-1.5 ${isDark ? "text-zinc-400 hover:text-cyan-400" : "text-zinc-600 hover:text-cyan-600"}`}
                       >
                         Pool: {poolAddress.slice(0, 10)}...{poolAddress.slice(-8)}
-                        <ExternalLink size={12} />
+                        <ExternalLink size={13} />
                       </a>
                     </div>
                   </div>
@@ -784,7 +784,7 @@ export default function LiquidityPage() {
                   className={`p-7 rounded-2xl border backdrop-blur-md
                     ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-xl shadow-black/20" : "bg-white/80 border-zinc-200/60 shadow-lg shadow-black/5"}`}
                 >
-                  <h3 className="text-xl font-bold mb-5 flex items-center gap-2">
+                  <h3 className="text-2xl font-black mb-5 flex items-center gap-2">
                     <Plus size={20} className="text-emerald-400" />
                     Add Liquidity to Position
                   </h3>
@@ -792,7 +792,7 @@ export default function LiquidityPage() {
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className={`block text-xs font-bold mb-2 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                        <label className={`block text-sm font-bold mb-2 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
                           WMST Amount
                         </label>
                         <div className="relative">
@@ -802,16 +802,16 @@ export default function LiquidityPage() {
                             value={addWmst}
                             onChange={(e) => setAddWmst(e.target.value)}
                             disabled={isWorking}
-                            className={`w-full py-3 px-3.5 rounded-lg border text-sm font-medium outline-none bg-transparent transition
+                            className={`w-full py-3.5 px-4 rounded-lg border text-base font-medium outline-none bg-transparent transition
                               ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                           />
-                          <span className={`absolute right-3 top-3 text-xs font-bold ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>WMST</span>
+                          <span className={`absolute right-3 top-3.5 text-sm font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>WMST</span>
                         </div>
-                        <span className={`text-xs mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Bal: {wmstBalance}</span>
+                        <span className={`text-sm mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>Bal: {wmstBalance}</span>
                       </div>
 
                       <div>
-                        <label className={`block text-xs font-bold mb-2 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                        <label className={`block text-sm font-bold mb-2 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
                           USDC Amount
                         </label>
                         <div className="relative">
@@ -821,19 +821,19 @@ export default function LiquidityPage() {
                             value={addUsdc}
                             onChange={(e) => setAddUsdc(e.target.value)}
                             disabled={isWorking}
-                            className={`w-full py-3 px-3.5 rounded-lg border text-sm font-medium outline-none bg-transparent transition
+                            className={`w-full py-3.5 px-4 rounded-lg border text-base font-medium outline-none bg-transparent transition
                               ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                           />
-                          <span className={`absolute right-3 top-3 text-xs font-bold ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>USDC</span>
+                          <span className={`absolute right-3 top-3.5 text-sm font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>USDC</span>
                         </div>
-                        <span className={`text-xs mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Bal: {usdcBalance}</span>
+                        <span className={`text-sm mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>Bal: {usdcBalance}</span>
                       </div>
                     </div>
 
                     <button
                       onClick={handleAddLiquidity}
                       disabled={isWorking || !addWmst || !addUsdc}
-                      className={`w-full py-3.5 rounded-lg font-bold text-sm tracking-wide transition-all active:scale-[0.98]
+                      className={`w-full py-4 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
                         ${isWorking || !addWmst || !addUsdc 
                           ? isDark ? "bg-emerald-500/20 text-emerald-400/50" : "bg-emerald-500/15 text-emerald-600/50"
                           : isDark ? "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 shadow-lg shadow-emerald-500/10" : "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-600 shadow-lg shadow-emerald-500/5"
@@ -851,13 +851,13 @@ export default function LiquidityPage() {
                     className={`p-7 rounded-2xl border backdrop-blur-md
                       ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-xl shadow-black/20" : "bg-white/80 border-zinc-200/60 shadow-lg shadow-black/5"}`}
                   >
-                    <h3 className="text-xl font-bold mb-5">Remove Liquidity</h3>
+                    <h3 className="text-2xl font-black mb-5">Remove Liquidity</h3>
                     
                     <div className="space-y-5">
                       <div>
                         <div className="flex justify-between items-center mb-3">
-                          <label className={`text-xs font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Withdraw Amount</label>
-                          <span className="text-sm font-bold bg-gradient-to-r from-red-400 to-orange-400 bg-clip-text text-transparent">{removePercent}%</span>
+                          <label className={`text-sm font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Withdraw Amount</label>
+                          <span className="text-base font-bold bg-gradient-to-r from-red-400 to-orange-400 bg-clip-text text-transparent">{removePercent}%</span>
                         </div>
                         <input
                           type="range"
@@ -866,10 +866,10 @@ export default function LiquidityPage() {
                           value={removePercent}
                           onChange={(e) => setRemovePercent(Number(e.target.value))}
                           disabled={isWorking}
-                          className={`w-full h-2 rounded-lg appearance-none cursor-pointer transition
+                          className={`w-full h-2.5 rounded-lg appearance-none cursor-pointer transition
                             ${isDark ? "bg-[#2C364F]/30" : "bg-zinc-300/30"} accent-red-500`}
                         />
-                        <div className="flex justify-between text-[10px] text-zinc-500 mt-2">
+                        <div className="flex justify-between text-xs text-zinc-500 mt-2 font-mono">
                           <span>0%</span>
                           <span>50%</span>
                           <span>100%</span>
@@ -879,7 +879,7 @@ export default function LiquidityPage() {
                       <button
                         onClick={handleRemoveLiquidity}
                         disabled={isWorking || !lpLiquidity || lpLiquidity === 0n}
-                        className={`w-full py-3.5 rounded-lg font-bold text-sm transition-all active:scale-[0.98]
+                        className={`w-full py-4 rounded-xl font-bold text-base transition-all active:scale-[0.98]
                           ${isWorking || !lpLiquidity || lpLiquidity === 0n
                             ? isDark ? "bg-red-500/20 text-red-400/50" : "bg-red-500/15 text-red-600/50"
                             : isDark ? "bg-red-500/20 hover:bg-red-500/30 text-red-400 shadow-lg shadow-red-500/10" : "bg-red-500/15 hover:bg-red-500/25 text-red-600 shadow-lg shadow-red-500/5"
@@ -897,28 +897,28 @@ export default function LiquidityPage() {
                   >
                     <div className="space-y-4">
                       <div>
-                        <h3 className="text-xl font-bold mb-2">LP Fee Rewards</h3>
-                        <p className={`text-xs ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
+                        <h3 className="text-2xl font-black mb-2">LP Fee Rewards</h3>
+                        <p className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
                           Accrued fees from swaps within your price range.
                         </p>
                       </div>
 
                       <div className={`p-4 rounded-xl border space-y-2.5 backdrop-blur-sm ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/20" : "bg-zinc-50/50 border-zinc-200/30"}`}>
-                        <div className="flex justify-between items-center text-xs font-semibold">
-                          <span className={`${isDark ? "text-zinc-400" : "text-zinc-600"} flex items-center gap-1.5`}>
-                            <TokenLogo symbol={token0Info.symbol} size={14} />
+                        <div className="flex justify-between items-center text-sm font-semibold">
+                          <span className={`${isDark ? "text-zinc-300" : "text-zinc-700"} flex items-center gap-1.5`}>
+                            <TokenLogo symbol={token0Info.symbol} size={16} />
                             {token0Info.symbol} Fees
                           </span>
-                          <span className="font-mono text-cyan-400">
+                          <span className="font-mono text-base text-cyan-400">
                             {tokensOwed0 !== null ? Number(formatUnits(tokensOwed0, token0Info.decimals)).toFixed(6) : "0.000000"}
                           </span>
                         </div>
-                        <div className="flex justify-between items-center text-xs font-semibold">
-                          <span className={`${isDark ? "text-zinc-400" : "text-zinc-600"} flex items-center gap-1.5`}>
-                            <TokenLogo symbol={token1Info.symbol} size={14} />
+                        <div className="flex justify-between items-center text-sm font-semibold">
+                          <span className={`${isDark ? "text-zinc-300" : "text-zinc-700"} flex items-center gap-1.5`}>
+                            <TokenLogo symbol={token1Info.symbol} size={16} />
                             {token1Info.symbol} Fees
                           </span>
-                          <span className="font-mono text-cyan-400">
+                          <span className="font-mono text-base text-cyan-400">
                             {tokensOwed1 !== null ? Number(formatUnits(tokensOwed1, token1Info.decimals)).toFixed(6) : "0.000000"}
                           </span>
                         </div>
@@ -928,7 +928,7 @@ export default function LiquidityPage() {
                     <button
                       onClick={handleCollectFees}
                       disabled={isWorking}
-                      className={`w-full py-3.5 rounded-lg font-bold text-sm mt-6 transition-all active:scale-[0.98]
+                      className={`w-full py-4 rounded-xl font-bold text-base mt-6 transition-all active:scale-[0.98]
                         ${isWorking 
                           ? isDark ? "bg-amber-500/20 text-amber-400/50" : "bg-amber-500/15 text-amber-600/50"
                           : isDark ? "bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 shadow-lg shadow-amber-500/10" : "bg-amber-500/15 hover:bg-amber-500/25 text-amber-600 shadow-lg shadow-amber-500/5"
@@ -1005,7 +1005,7 @@ export default function LiquidityPage() {
                   <Coins size={24} className="text-cyan-400" />
                   Create Pool
                 </h2>
-                <p className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
+                <p className={`text-base ${isDark ? "text-zinc-400" : "text-zinc-600"} leading-relaxed`}>
                   Deploy a new concentrated liquidity pool and initialize your first position.
                 </p>
               </div>
@@ -1013,7 +1013,7 @@ export default function LiquidityPage() {
               <div className="space-y-5">
                 {/* Fee Tier */}
                 <div>
-                  <label className={`block text-xs font-bold mb-3 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                  <label className={`block text-sm font-bold mb-3 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
                     Pool Fee Tier
                   </label>
                   <div className="grid grid-cols-3 gap-2.5">
@@ -1022,7 +1022,7 @@ export default function LiquidityPage() {
                         key={fee}
                         type="button"
                         onClick={() => setInitFee(fee)}
-                        className={`py-3 px-3 rounded-lg border text-xs font-bold transition-all
+                        className={`py-3 px-3 rounded-lg border text-sm font-bold transition-all
                           ${
                             initFee === fee
                               ? isDark ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-400 shadow-lg shadow-cyan-500/10" : "bg-cyan-500/15 border-cyan-500/30 text-cyan-600 shadow-lg shadow-cyan-500/5"
@@ -1030,7 +1030,7 @@ export default function LiquidityPage() {
                           }`}
                       >
                         {(fee / 10000).toFixed(2)}%
-                        <div className="text-[10px] font-normal mt-0.5 opacity-75">
+                        <div className="text-xs font-normal mt-0.5 opacity-75">
                           {fee === 3000 ? "Typical" : fee === 500 ? "Stable" : "Exotic"}
                         </div>
                       </button>
@@ -1042,8 +1042,8 @@ export default function LiquidityPage() {
                 <div className="space-y-4">
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-xs font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Initial WMST</label>
-                      <span className={`text-xs ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Bal: {wmstBalance}</span>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Initial WMST</label>
+                      <span className={`text-sm ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>Bal: {wmstBalance}</span>
                     </div>
                     <div className="relative">
                       <input
@@ -1052,20 +1052,20 @@ export default function LiquidityPage() {
                         value={initWmst}
                         onChange={(e) => setInitWmst(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-3 px-3.5 rounded-lg border text-sm font-medium outline-none bg-transparent transition
+                        className={`w-full py-3.5 px-4 rounded-lg border text-base font-medium outline-none bg-transparent transition
                           ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                       />
-                      <div className="absolute right-3 top-3 flex items-center gap-1">
-                        <TokenLogo symbol="WMST" size={16} />
-                        <span className="text-xs font-bold">WMST</span>
+                      <div className="absolute right-3 top-3.5 flex items-center gap-1">
+                        <TokenLogo symbol="WMST" size={18} />
+                        <span className="text-sm font-bold">WMST</span>
                       </div>
                     </div>
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-xs font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Initial USDC</label>
-                      <span className={`text-xs ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Bal: {usdcBalance}</span>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>Initial USDC</label>
+                      <span className={`text-sm ${isDark ? "text-zinc-500" : "text-zinc-500"}`}>Bal: {usdcBalance}</span>
                     </div>
                     <div className="relative">
                       <input
@@ -1074,12 +1074,12 @@ export default function LiquidityPage() {
                         value={initUsdc}
                         onChange={(e) => setInitUsdc(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-3 px-3.5 rounded-lg border text-sm font-medium outline-none bg-transparent transition
+                        className={`w-full py-3.5 px-4 rounded-lg border text-base font-medium outline-none bg-transparent transition
                           ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                       />
-                      <div className="absolute right-3 top-3 flex items-center gap-1">
-                        <TokenLogo symbol="USDC" size={16} />
-                        <span className="text-xs font-bold">USDC</span>
+                      <div className="absolute right-3 top-3.5 flex items-center gap-1">
+                        <TokenLogo symbol="USDC" size={18} />
+                        <span className="text-sm font-bold">USDC</span>
                       </div>
                     </div>
                   </div>
@@ -1087,7 +1087,7 @@ export default function LiquidityPage() {
 
                 {/* Tick bounds */}
                 <div>
-                  <label className={`block text-xs font-bold mb-3 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                  <label className={`block text-sm font-bold mb-3 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
                     Price Range
                   </label>
                   <div className="grid grid-cols-2 gap-3">
@@ -1097,10 +1097,10 @@ export default function LiquidityPage() {
                         value={initTickLower}
                         onChange={(e) => setInitTickLower(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-3 px-3 rounded-lg border text-xs font-mono outline-none bg-transparent transition
+                        className={`w-full py-3.5 px-3 rounded-lg border text-sm font-mono outline-none bg-transparent transition
                           ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                       />
-                      <span className={`text-[10px] mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Lower Tick</span>
+                      <span className={`text-xs mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Lower Tick</span>
                     </div>
 
                     <div>
@@ -1109,18 +1109,18 @@ export default function LiquidityPage() {
                         value={initTickUpper}
                         onChange={(e) => setInitTickUpper(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-3 px-3 rounded-lg border text-xs font-mono outline-none bg-transparent transition
+                        className={`w-full py-3.5 px-3 rounded-lg border text-sm font-mono outline-none bg-transparent transition
                           ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300/50 focus:border-cyan-500/50"}`}
                       />
-                      <span className={`text-[10px] mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Upper Tick</span>
+                      <span className={`text-xs mt-1.5 block ${isDark ? "text-zinc-500" : "text-zinc-600"}`}>Upper Tick</span>
                     </div>
                   </div>
                 </div>
 
                 {/* Info banner */}
-                <div className={`p-4 rounded-lg border flex items-start gap-3 text-xs leading-relaxed
+                <div className={`p-4 rounded-lg border flex items-start gap-3 text-sm leading-relaxed
                   ${isDark ? "bg-[#1B2236]/50 border-cyan-500/20 text-zinc-400" : "bg-cyan-50/50 border-cyan-300/20 text-zinc-700"}`}>
-                  <Info size={16} className="text-cyan-400 shrink-0 mt-0.5" />
+                  <Info size={18} className="text-cyan-400 shrink-0 mt-0.5" />
                   <div>
                     <p className={`font-bold mb-1 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Price Initialization</p>
                     Deploys at your input token ratio dynamically. Full-range concentrated position enabled by default.
@@ -1131,7 +1131,7 @@ export default function LiquidityPage() {
                 <button
                   onClick={handleInitializePool}
                   disabled={isWorking || !initWmst || !initUsdc}
-                  className={`w-full py-4 rounded-lg font-bold text-sm tracking-wide transition-all active:scale-[0.98]
+                  className={`w-full py-4 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
                     ${isWorking || !initWmst || !initUsdc 
                       ? isDark ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400/50" : "bg-gradient-to-r from-cyan-500/15 to-blue-500/15 text-cyan-600/50"
                       : isDark ? "bg-gradient-to-r from-cyan-500/30 to-blue-500/30 hover:from-cyan-500/40 hover:to-blue-500/40 text-cyan-400 shadow-lg shadow-cyan-500/20" : "bg-gradient-to-r from-cyan-500/25 to-blue-500/25 hover:from-cyan-500/35 hover:to-blue-500/35 text-cyan-600 shadow-lg shadow-cyan-500/10"

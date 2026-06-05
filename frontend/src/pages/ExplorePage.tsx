@@ -276,7 +276,7 @@ export default function ExplorePage() {
         <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent uppercase font-display">
           Market Analytics
         </h1>
-        <p className="text-sm text-muted-foreground font-light max-w-xl">
+        <p className="text-base text-muted-foreground font-light max-w-xl">
           Track real-time token valuations, liquidity pool volumes, and historical swap transaction activity.
         </p>
       </div>
@@ -298,7 +298,7 @@ export default function ExplorePage() {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`rounded-full px-5 py-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 ${tab === t
+              className={`rounded-full px-5 py-2 text-sm font-bold uppercase tracking-wider transition-all duration-200 ${tab === t
                   ? isDark
                     ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
                     : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
@@ -318,7 +318,7 @@ export default function ExplorePage() {
               <button
                 key={r}
                 onClick={() => setRange(r)}
-                className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-200 ${range === r
+                className={`rounded-full px-4 py-1.5 text-sm font-bold uppercase tracking-wider transition-all duration-200 ${range === r
                     ? isDark
                       ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
                       : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
@@ -345,13 +345,13 @@ export default function ExplorePage() {
               placeholder="Search address (0x...)"
               value={addressInput}
               onChange={(e) => setAddressInput(e.target.value)}
-              className={`flex-1 rounded-xl px-4 py-3.5 outline-none transition ring-1 text-sm font-mono
+              className={`flex-1 rounded-xl px-4 py-4 outline-none transition ring-1 text-base font-mono
                 ${isDark 
                   ? "bg-slate-900 border-slate-700 ring-slate-700/50 text-slate-100 placeholder:text-slate-500 focus:ring-cyan-500/40" 
                   : "bg-white border-slate-200 ring-slate-200 text-slate-950 placeholder:text-slate-400 focus:ring-cyan-200"}`}
             />
             <button
-              className={`rounded-xl px-6 py-3.5 font-bold uppercase tracking-wider text-xs text-white transition-all active:scale-[0.98] flex items-center gap-2
+              className={`rounded-xl px-6 py-4 font-bold uppercase tracking-wider text-sm text-white transition-all active:scale-[0.98] flex items-center gap-2
                 ${isSearching 
                   ? "bg-slate-500 cursor-not-allowed" 
                   : isDark 
@@ -367,7 +367,7 @@ export default function ExplorePage() {
           </div>
 
           {errorMsg && (
-            <p className="text-xs text-rose-400 font-bold font-mono">{errorMsg}</p>
+            <p className="text-sm text-rose-400 font-bold font-mono">{errorMsg}</p>
           )}
 
           {/* Results display */}
@@ -381,21 +381,21 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-base uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
-                  <Database size={14} />
+                  <Database size={15} />
                   Asset Holdings
                 </h3>
 
                 <div className="space-y-3">
                   {tokenBalances.map((token) => (
-                    <div key={token.symbol} className={`p-3.5 rounded-xl border flex justify-between items-center text-xs
+                    <div key={token.symbol} className={`p-3.5 rounded-xl border flex justify-between items-center text-sm
                       ${isDark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-50/50"}`}
                     >
                       <div>
                         <div className="font-bold">{token.symbol}</div>
-                        <div className="text-[10px] text-muted-foreground font-light">{token.name}</div>
+                        <div className="text-xs text-muted-foreground font-light">{token.name}</div>
                       </div>
                       <div className="font-mono font-semibold">
                         {Number(token.balance).toFixed(4)}
@@ -409,33 +409,33 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-base uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
-                  <ListCollapse size={14} />
+                  <ListCollapse size={15} />
                   Historical Transaction Log
                 </h3>
 
                 <div className="space-y-4">
                   {txHistory.map((tx) => (
-                    <div key={tx.hash} className={`p-4 rounded-xl border space-y-2 text-xs
+                    <div key={tx.hash} className={`p-4 rounded-xl border space-y-2 text-sm
                       ${isDark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-50/50"}`}
                     >
                       <div className="flex justify-between items-center">
                         <span className="font-bold">{tx.method}</span>
-                        <span className="text-[10px] text-muted-foreground font-mono">{tx.time}</span>
+                        <span className="text-xs text-muted-foreground font-mono">{tx.time}</span>
                       </div>
-                      <div className="text-[11px] text-zinc-400 font-mono flex justify-between items-center gap-4">
+                      <div className="text-xs text-zinc-400 font-mono flex justify-between items-center gap-4">
                         <span>{tx.details}</span>
                         <a
                           href={`https://testnet.mstscan.com/tx/${tx.hash}`}
                           target="_blank"
                           rel="noreferrer"
-                          className={`hover:underline flex items-center gap-1 leading-none font-sans font-bold text-[10px]
+                          className={`hover:underline flex items-center gap-1 leading-none font-sans font-bold text-xs
                             ${isDark ? "text-cyan-300" : "text-cyan-600"}`}
                         >
                           MSTScan
-                          <ExternalLink size={10} />
+                          <ExternalLink size={11} />
                         </a>
                       </div>
                     </div>
