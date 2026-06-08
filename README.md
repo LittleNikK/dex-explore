@@ -59,7 +59,7 @@ Create or update your `.env` file under `contracts/` directory using the active 
 
 ```env
 RPC_URL=https://testnetrpc.mstblockchain.com
-PRIVATE_KEY=0xbadf51d5f09e5f88d4a30f2140e2a091a9cc39b13673d1e211f30c441cc4f4a7
+PRIVATE_KEY=0xYOUR_PRIVATE_KEY
 WMST_ADDRESS=0x9cEB1BA457f390091a119Cd09BCF3ee2c832f900
 CHAIN_ID=91562037
 V3_FACTORY_ADDRESS=0x2d60F52fC83c78Ad920a95bA00806bE7162b8588

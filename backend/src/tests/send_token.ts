@@ -1,6 +1,11 @@
 import { createWalletClient, http, parseUnits, createPublicClient, type Address } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import addresses from "../config/addresses.json" with { type: "json" };
+import * as dotenv from "dotenv";
+
+dotenv.config();
+dotenv.config({ path: "../.env" });
+dotenv.config({ path: "../../.env" });
 
 const mstTestnet = {
   id: 91562037,
@@ -67,8 +72,8 @@ async function send() {
     decimals = 8;
   }
 
-  // Use private key from .env.bak
-  const pk = "0xbadf51d5f09e5f88d4a30f2140e2a091a9cc39b13673d1e211f30c441cc4f4a7";
+  // Retrieve private key from environment or fallback to a dummy key
+  const pk = (process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000000") as `0x${string}`;
   const account = privateKeyToAccount(pk);
   
   console.log(`Initiating transfer of ${amount} ${symbol}...`);

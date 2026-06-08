@@ -220,19 +220,19 @@ export default function ExplorePage() {
       // 4. Fallback sequence: Subgraph -> On-chain Logs -> Simulated logs
       const simulatedHistory: ExplorerTx[] = [
         {
-          hash: "0x82f2bd92e10693ce6a6a1bfbfbf21b6b187deefa02641c27ec527a09f8484dc4",
+          hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
           time: new Date(Date.now() - 30 * 60000).toLocaleString(),
           method: "Swap Single",
           details: "USDC ➜ WMST (0.3% Pool)"
         },
         {
-          hash: "0x1d5f09e5f88d4a30f2140e2a091a9cc39b13673d1e211f30c441cc4f4a7c5b91",
+          hash: "0x9876543210abcdef9876543210abcdef9876543210abcdef9876543210abcdef",
           time: new Date(Date.now() - 140 * 60000).toLocaleString(),
           method: "Approval",
           details: "USDC Spend Approved for SwapRouter"
         },
         {
-          hash: "0xbadf51d5f09e5f88d4a30f2140e2a091a9cc39b13673d1e211f30c441cc4f4a7",
+          hash: "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
           time: new Date(Date.now() - 500 * 60000).toLocaleString(),
           method: "Transfer",
           details: "Transfer of 5.0 WMST"
