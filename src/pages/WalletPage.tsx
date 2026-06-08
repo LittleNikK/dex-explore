@@ -84,7 +84,7 @@ export default function WalletPage() {
               <button
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3.5 text-base font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={!metaMaskConnector || isPending}
-                onClick={() => metaMaskConnector && connect({ connector: metaMaskConnector })}
+                onClick={() => metaMaskConnector && connect({ connector: metaMaskConnector, chainId: mstChain.id })}
               >
                 <Wallet size={18} />
                 {isPending ? "Connecting..." : "Connect MetaMask"}

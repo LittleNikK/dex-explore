@@ -2,8 +2,8 @@ export const mstChain = {
   id: 91562037,
   name: "MST Testnet",
   nativeCurrency: {
-    name: "MST",
-    symbol: "MST",
+    name: "tMSTC",
+    symbol: "tMSTC",
     decimals: 18
   },
   rpcUrls: {

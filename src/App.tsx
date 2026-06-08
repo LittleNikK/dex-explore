@@ -58,7 +58,7 @@ function Navigation() {
   const handleWalletClick = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!isConnected && metaMaskConnector) {
-      connect({ connector: metaMaskConnector });
+      connect({ connector: metaMaskConnector, chainId: mstChain.id });
     } else {
       setShowDropdown(!showDropdown);
     }
@@ -67,8 +67,8 @@ function Navigation() {
   const links: Array<{ to?: string; label: string; subLinks?: { to: string; label: string }[] }> = [
     { to: "/", label: "Swap" },
     { to: "/explore", label: "Explore" },
-    { 
-      label: "Pool", 
+    {
+      label: "Pool",
       subLinks: [
         { to: "/liquidity?view=create", label: "Create Pool" },
         { to: "/liquidity?view=list", label: "View Position" }

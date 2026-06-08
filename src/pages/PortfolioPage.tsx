@@ -1,6 +1,7 @@
 import { useThemeStore } from "../store/themeStore";
 import { PortfolioPage } from "../features/portfolio/components/PortfolioPage";
 import { useAccount, useConnect } from "wagmi";
+import { mstChain } from "../config/chains";
 
 export default function PortfolioPageWrapper() {
   const { theme } = useThemeStore();
@@ -22,7 +23,7 @@ export default function PortfolioPageWrapper() {
             you are not connected to the wallet , make sure to connect your wallet
           </p>
           <button
-            onClick={() => metaMaskConnector && connect({ connector: metaMaskConnector })}
+            onClick={() => metaMaskConnector && connect({ connector: metaMaskConnector, chainId: mstChain.id })}
             disabled={!metaMaskConnector}
             className="w-full rounded-2xl bg-gradient-to-r from-cyan-500 to-indigo-600 px-4 py-3.5 text-sm font-display font-bold text-white hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
