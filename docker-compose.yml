@@ -1,20 +1,4 @@
 services:
-  postgres:
-    image: timescale/timescaledb:latest-pg16
-    environment:
-      POSTGRES_USER: mst
-      POSTGRES_PASSWORD: mst
-      POSTGRES_DB: mstdex
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mst -d mstdex"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   graph-postgres:
     image: postgres:16
     command: ["postgres", "-cshared_preload_libraries=pg_stat_statements", "-cmax_connections=200"]
@@ -29,17 +13,6 @@ services:
       - ./infra/graph-node/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U graph-node -d graph-node"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -68,23 +41,8 @@ services:
       - "8000:8000"
       - "8020:8020"
 
-  backend:
-    build: ./backend
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://mst:mst@postgres:5432/mstdex
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "${BACKEND_PORT:-3001}:3001"
-
   frontend:
     build: ./frontend
-    depends_on:
-      - backend
     environment:
       VITE_WMST_ADDRESS: ${WMST_ADDRESS}
       VITE_SWAP_ROUTER_ADDRESS: ${SWAP_ROUTER_ADDRESS}
@@ -97,5 +55,4 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
 
 volumes:
-  pgdata:
   graphdata:

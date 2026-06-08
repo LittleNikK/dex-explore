@@ -100,12 +100,6 @@ graph TD
 - **Web3 Integrations**: WAGMI (v2) and Viem for RPC provider configuration, chain definitions (`chains.ts`), and MetaMask connector integrations.
 - **Styling**: Premium custom CSS with HSL tailored variables, dark/light toggle modes, and glassmorphism styling.
 
-### Backend Architecture
-- **Server**: Node.js + Express + TypeScript.
-- **Process Manager**: TSX / Node compiler.
-- **WebSocket Gateway**: `ws` package attached to the Express HTTP Server.
-- **Messaging Pipeline**: `ioredis` subscriber connecting to a local/cloud Redis instance for pub/sub events.
-
 ### Database Architecture
 - **Engine**: PostgreSQL.
 - **ORM**: Prisma Client.
@@ -125,15 +119,6 @@ graph TD
 - [`package.json`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/package.json): Root metadata and npm workspace configuration.
 - [`.env`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/.env): Root variables loaded by deployment scripts and tests.
 - [`README.md`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/README.md): Main testnet integration playbook and architecture documentation.
-
-#### Backend Module (`backend/`)
-- [`backend/src/index.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/index.ts): Express server entrypoint. Imports API routers, exposes `/health` and Prometheus `/metrics`, starts the WebSocket server on process start.
-- [`backend/src/config/client.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/config/client.ts): Initializes the Viem public client using `RPC_URL` configured in env.
-- [`backend/src/services/sor.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/services/sor.ts): Smart Order Router service. Fetches reserves, performs constant-product fallback estimation, and queries `QuoterV2` to return the optimal path.
-- [`backend/src/routes/pools.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/routes/pools.ts): Contains functions `getDynamicPoolDetails` and `getDynamicPoolTransactions`. Queries pool reserves and parses raw `Swap`, `Mint`, and `Burn` logs directly from the blockchain to compute volume and APR.
-- [`backend/src/routes/quote.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/routes/quote.ts): Exposes the `/api/quote` route. Parses request parameters via Zod.
-- [`backend/src/routes/tokens.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/routes/tokens.ts): Exposes the `/api/tokens` route. Returns token list with live prices and individual TVL details.
-- [`backend/src/ws/server.ts`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/backend/src/ws/server.ts): WebSocket server initialization. Configured with error handlers to prevent unhandled crashes when Redis is offline and uses `sub.disconnect()` to ensure proper process exit on teardown.
 
 #### Frontend Module (`frontend/`)
 - [`frontend/src/App.tsx`](file:///c:/Users/Masterstroke%2018/Downloads/final-dex/frontend/src/App.tsx): Frontend root layout. Wraps app in `WagmiProvider`, `QueryClientProvider`, and `BrowserRouter` (pre-configured with React Router v7 transition future flags).
@@ -159,118 +144,6 @@ graph TD
 ---
 
 ## 5. API Documentation
-
-All backend endpoints are hosted on `http://localhost:3001` (by default) and do not require API authentication headers.
-
-### Endpoint 1: `GET /health`
-* **Purpose**: Checks backend server status.
-* **Request**: `GET /health`
-* **Response**:
-  ```json
-  { "status": "ok" }
-  ```
-
-### Endpoint 2: `GET /api/pools`
-* **Purpose**: Fetches active pool details including on-chain reserves and computed stats.
-* **Request**: `GET /api/pools`
-* **Response**:
-  ```json
-  {
-    "pools": [
-      {
-        "id": "0xB9584880ec7B239F9467F1ee6Ed39fEE03eDf605",
-        "token0": "WMST",
-        "token1": "USDC",
-        "feeTier": 3000,
-        "tvlUSD": 154200.5,
-        "volumeUSD": 12400.0,
-        "wmstReserve": 75000.0,
-        "usdcReserve": 79200.5,
-        "liveMstPrice": 1.056,
-        "apr": 12.4,
-        "change24h": 2.34,
-        "wmstDec": 18,
-        "usdcDec": 18
-      }
-    ]
-  }
-  ```
-
-### Endpoint 3: `GET /api/pools/transactions`
-* **Purpose**: Returns the 30 most recent pool transactions (swaps, mints, burns) logged on-chain.
-* **Request**: `GET /api/pools/transactions`
-* **Response**:
-  ```json
-  {
-    "transactions": [
-      {
-        "hash": "0x5d9e...",
-        "blockNumber": 234123n,
-        "type": "swap",
-        "token0": "USDC",
-        "token1": "WMST",
-        "usd": 150.0,
-        "account": "0x9B18...",
-        "timestamp": 1782348123000
-      }
-    ]
-  }
-  ```
-
-### Endpoint 4: `POST /api/quote`
-* **Purpose**: Fetches the best path swap returns via the Smart Order Router.
-* **Request**:
-  * **Headers**: `Content-Type: application/json`
-  * **Body**:
-    ```json
-    {
-      "tokenIn": "WMST",
-      "tokenOut": "USDC",
-      "amountIn": "1000000000000000000"
-    }
-    ```
-* **Response**:
-  ```json
-  {
-    "tokenIn": "WMST",
-    "tokenOut": "USDC",
-    "amountIn": "1000000000000000000",
-    "amountOut": "1056000000000000000",
-    "path": ["WMST", "USDC"],
-    "hops": 1
-  }
-  ```
-* **Error Response** (Invalid body parameters):
-  ```json
-  {
-    "error": {
-      "fieldErrors": {
-        "amountIn": ["Required"]
-      }
-    }
-  }
-  ```
-
-### Endpoint 5: `GET /api/tokens`
-* **Purpose**: Returns available tokens with active pricing, volume, and TVL metrics.
-* **Request**: `GET /api/tokens`
-* **Response**:
-  ```json
-  {
-    "tokens": [
-      {
-        "address": "native",
-        "symbol": "MST",
-        "name": "tMST Native Token",
-        "decimals": 18,
-        "priceUsd": 1.056,
-        "change24h": 2.34,
-        "volume24h": 7440.0,
-        "tvl": 79200.0
-      }
-    ]
-  }
-  ```
 
 ---
 
@@ -366,15 +239,11 @@ The project is backed by four distinct test suites representing unit, integratio
 2. **Vitest Frontend Unit Tests (`frontend/src/tests/`)**:
    - `SwapCard.test.tsx`: Verifies state initialization, rendering, and token switches.
    - `LiquidityPage.test.tsx`: Asserts correct rendering of the LP wizard wrapped in React Router context.
-3. **Jest Backend Unit Tests (`backend/src/tests/`)**:
-   - `websocket.test.ts`: Verifies WebSocket server connection gateways.
-   - `quote.test.ts`: Asserts Zod schema validation and SOR routing results.
-   - `pools.ts`: Asserts dynamic pool reserves retrieval.
-4. **Playwright E2E Browser Tests (`e2e/tests/`)**:
+3. **Playwright E2E Browser Tests (`e2e/tests/`)**:
    - `swap.spec.ts`: E2E verification of header navigation, USD/INR currency toggle, and slippage warnings.
 
 ### Verification Matrix
-- All test suites pass 100% cleanly following the cleanup modifications. No memory leaks or unhandled Redis reconnect timer hangs remain.
+- All test suites pass 100% cleanly.
 
 ---
 

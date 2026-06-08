@@ -307,48 +307,29 @@ Ran 3 test suites in 13.20s: 4 tests passed, 0 failed, 0 skipped (4 total tests)
 
 ---
 
-## 🚀 Running the Full Stack Locally
+## 🚀 Running the Frontend Locally
 
-To launch the complete integrated DApp locally, you can choose either the single-command Docker Orchestration or the manual Developer mode.
-
-### Option A: The Automated Docker Way (Recommended)
-This command spins up the databases, Redis cache, IPFS, local Graph Node, the Event-Listening API, and the Frontend in a single, isolated setup:
+### Option A: Docker (Recommended)
+Spins up IPFS, local Graph Node, and the Frontend in one command:
 ```bash
 docker compose up --build
 ```
 - **Frontend URL**: `http://localhost:3000`
-- **Backend URL**: `http://localhost:3001`
 
 ---
 
-### Option B: The Developer Manual Way
-If you prefer running individual processes for hot-reloading and development feedback:
+### Option B: Manual Developer Mode
 
-#### 1. Start Database & Redis Backing Services
-Ensure Docker is active, then spin up the infrastructure container:
+#### 1. Start Graph Node Infrastructure
 ```bash
-docker compose up -d postgres graph-postgres redis ipfs graph-node
+docker compose up -d graph-postgres ipfs graph-node
 ```
 
-#### 2. Start the Backend API & Event Listener
-Prisma client generation and DB setup is required:
-```bash
-cd backend
-npm install
-npm run prisma:generate
-npm run dev
-```
-- **Host**: `http://localhost:3001`
-- **Logs**: Monitors live on-chain event streams and updates token swap graph indices.
-
-#### 3. Start the Frontend Vite Server
-Launch the React trading terminal interface:
+#### 2. Start the Frontend Vite Server
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 - **Host**: `http://localhost:3000`
-- **Features**: Real-time wallet handshakes, concentrated swap paths, fee estimations, and dynamic theme visual layers.
-
-#   d e x - 6 2  
+- **Features**: Real-time wallet handshakes, concentrated swap paths, fee estimations, and dynamic theme visual layers.
