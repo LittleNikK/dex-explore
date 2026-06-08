@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import * as dotenv from "dotenv";
+import { createServer } from "http";
+import { startWsServer } from "./ws/server.js";
 import { poolsRouter } from "./routes/pools.js";
 import { quoteRouter } from "./routes/quote.js";
 import { tokensRouter } from "./routes/tokens.js";
@@ -24,10 +26,17 @@ app.use("/api/tokens", tokensRouter);
 
 const PORT = Number(process.env.PORT ?? 3001);
 
+const server = createServer(app);
+
 // Only start listening when run directly (not when imported by tests).
 if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`MST Swap backend listening on :${PORT}`);
+    try {
+      startWsServer({ server });
+    } catch (err) {
+      console.error("Failed to start WebSocket server:", err);
+    }
   });
 }
 

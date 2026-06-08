@@ -10,8 +10,6 @@ export const CONTRACTS = {
   wmst: (import.meta.env.VITE_WMST_ADDRESS || addresses.WMST_ADDRESS) as Address,
   swapRouter: (import.meta.env.VITE_SWAP_ROUTER_ADDRESS || addresses.SWAP_ROUTER_ADDRESS) as Address,
   quoterV2: (import.meta.env.VITE_QUOTER_V2_ADDRESS || addresses.QUOTER_V2_ADDRESS) as Address,
-  testingExecutor: (import.meta.env.VITE_TESTING_EXECUTOR_ADDRESS || addresses.TESTING_EXECUTOR_ADDRESS) as Address,
-  lpStateStorage: (import.meta.env.VITE_LP_STATE_STORAGE_ADDRESS || addresses.LP_STATE_STORAGE_ADDRESS) as Address,
   positionManager: (import.meta.env.VITE_POSITION_MANAGER_ADDRESS || addresses.POSITION_MANAGER_ADDRESS) as Address,
   usdc: (import.meta.env.VITE_USDC_ADDRESS || addresses.USDC_ADDRESS) as Address,
   factory: (import.meta.env.VITE_V3_FACTORY_ADDRESS || addresses.V3_FACTORY_ADDRESS) as Address
@@ -147,114 +145,6 @@ export const swapRouterAbi = [
       }
     ],
     outputs: [{ name: "amountOut", type: "uint256" }]
-  }
-] as const;
-
-export const testingExecutorAbi = [
-  {
-    type: "function",
-    name: "activeTokenId",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
-  },
-  {
-    type: "function",
-    name: "initiatePoolAndLiquidity",
-    stateMutability: "payable",
-    inputs: [
-      {
-        name: "params",
-        type: "tuple",
-        components: [
-          { name: "fee", type: "uint24" },
-          { name: "sqrtPriceX96", type: "uint160" },
-          { name: "wmstDesired", type: "uint256" },
-          { name: "usdcDesired", type: "uint256" },
-          { name: "tickLower", type: "int24" },
-          { name: "tickUpper", type: "int24" }
-        ]
-      }
-    ],
-    outputs: [
-      { name: "pool", type: "address" },
-      { name: "tokenId", type: "uint256" },
-      { name: "liquidity", type: "uint128" },
-      { name: "amount0", type: "uint256" },
-      { name: "amount1", type: "uint256" }
-    ]
-  },
-  {
-    type: "function",
-    name: "increaseActiveLiquidity",
-    stateMutability: "payable",
-    inputs: [
-      { name: "wmstDesired", type: "uint256" },
-      { name: "usdcDesired", type: "uint256" }
-    ],
-    outputs: [
-      { name: "liquidityAdded", type: "uint128" },
-      { name: "amount0", type: "uint256" },
-      { name: "amount1", type: "uint256" }
-    ]
-  },
-  {
-    type: "function",
-    name: "decreaseActiveLiquidity",
-    stateMutability: "nonpayable",
-    inputs: [{ name: "liquidityToRemove", type: "uint128" }],
-    outputs: [
-      { name: "amount0", type: "uint256" },
-      { name: "amount1", type: "uint256" }
-    ]
-  },
-  {
-    type: "function",
-    name: "collectActiveFees",
-    stateMutability: "nonpayable",
-    inputs: [],
-    outputs: [
-      { name: "amount0Collected", type: "uint256" },
-      { name: "amount1Collected", type: "uint256" }
-    ]
-  }
-] as const;
-
-export const lpStateStorageAbi = [
-  {
-    type: "function",
-    name: "poolAddress",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "address" }]
-  },
-  {
-    type: "function",
-    name: "lpTokenId",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
-  },
-  {
-    type: "function",
-    name: "lpLiquidity",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
-  },
-  {
-    type: "function",
-    name: "lpAmount0",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
-  },
-  {
-    type: "function",
-    name: "lpAmount1",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
   }
 ] as const;
 

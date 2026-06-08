@@ -444,8 +444,8 @@ export async function getWalletPortfolioSnapshot({
         const timestamp = blockTimestamps[blockNum?.toString() || ""] || Date.now();
         
         const hasRouter = txLogs.some(l => 
-          [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
-          [CONTRACTS.swapRouter?.toLowerCase(), CONTRACTS.testingExecutor?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
+          [CONTRACTS.swapRouter?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
+          [CONTRACTS.swapRouter?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
         );
         
         const hasPositionManager = txLogs.some(l =>

@@ -1,7 +1,16 @@
 import { Router } from "express";
-import addresses from "../config/addresses.json" with { type: "json" };
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
 import { publicClient } from "../config/client.js";
 import { formatUnits, parseUnits, type Address, parseAbiItem } from "viem";
+
+const getAddresses = () => {
+  const srcPath = join(process.cwd(), "src/config/addresses.json");
+  const distPath = join(process.cwd(), "dist/config/addresses.json");
+  const path = existsSync(srcPath) ? srcPath : distPath;
+  return JSON.parse(readFileSync(path, "utf8"));
+};
+const addresses = getAddresses();
 
 export const poolsRouter = Router();
 
@@ -12,17 +21,26 @@ const erc20Abi = [
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
     outputs: [{ name: "", type: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "decimals",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
   }
 ] as const;
 
-function getMstPriceFromSqrtPriceX96(sqrtPriceX96: bigint, isWmstToken0: boolean): number {
+function getMstPriceFromSqrtPriceX96(
+  sqrtPriceX96: bigint,
+  isWmstToken0: boolean,
+  wmstDec: number,
+  usdcDec: number
+): number {
   const priceRatio = Number(sqrtPriceX96) / (2 ** 96);
   const ratioSquared = priceRatio * priceRatio;
-  if (isWmstToken0) {
-    return ratioSquared;
-  } else {
-    return ratioSquared > 0 ? 1 / ratioSquared : 0;
-  }
+  const rawPrice = isWmstToken0 ? ratioSquared : (ratioSquared > 0 ? 1 / ratioSquared : 0);
+  return rawPrice * (10 ** (wmstDec - usdcDec));
 }
 
 export async function getDynamicPoolDetails() {
@@ -35,14 +53,16 @@ export async function getDynamicPoolDetails() {
   let wmstReserve = 0;
   let usdcReserve = 0;
   let liveMstPrice = 0;
+  let wmstDec = 18;
+  let usdcDec = 18;
 
   let volumeUSD = 0;
   let change24h = 0;
   let apr = 12.4;
 
   try {
-    // 1. Fetch pool token balances
-    const [wmstBal, usdcBal] = await Promise.all([
+    // 1. Fetch pool token balances and decimals
+    const [wmstBal, usdcBal, wmstDecimals, usdcDecimals] = await Promise.all([
       publicClient.readContract({
         address: wmstAddress,
         abi: erc20Abi,
@@ -54,15 +74,28 @@ export async function getDynamicPoolDetails() {
         abi: erc20Abi,
         functionName: "balanceOf",
         args: [poolId]
+      }),
+      publicClient.readContract({
+        address: wmstAddress,
+        abi: erc20Abi,
+        functionName: "decimals"
+      }),
+      publicClient.readContract({
+        address: usdcAddress,
+        abi: erc20Abi,
+        functionName: "decimals"
       })
     ]);
 
-    wmstReserve = Number(formatUnits(wmstBal, 18));
-    usdcReserve = Number(formatUnits(usdcBal, 18));
+    wmstDec = Number(wmstDecimals);
+    usdcDec = Number(usdcDecimals);
+
+    wmstReserve = Number(formatUnits(wmstBal, wmstDec));
+    usdcReserve = Number(formatUnits(usdcBal, usdcDec));
 
     // 2. Fetch live MST price
     try {
-      const oneUnitRaw = parseUnits("1", 18);
+      const oneUnitRaw = parseUnits("1", wmstDec);
       const { result } = await publicClient.simulateContract({
         address: quoterAddress,
         abi: [
@@ -104,7 +137,7 @@ export async function getDynamicPoolDetails() {
       });
 
       if (result) {
-        liveMstPrice = Number(formatUnits(result[0], 18));
+        liveMstPrice = Number(formatUnits(result[0], usdcDec));
       }
     } catch {}
 
@@ -131,7 +164,7 @@ export async function getDynamicPoolDetails() {
           const amount0Abs = amount0 < 0n ? -amount0 : amount0;
           const amount1Abs = amount1 < 0n ? -amount1 : amount1;
           const usdcAmtRaw = isWmstToken0 ? amount1Abs : amount0Abs;
-          sumUsd += Number(formatUnits(usdcAmtRaw, 18));
+          sumUsd += Number(formatUnits(usdcAmtRaw, usdcDec));
         }
       }
       volumeUSD = sumUsd;
@@ -142,7 +175,7 @@ export async function getDynamicPoolDetails() {
         const oldestSwap = swapLogs[0];
         const oldestSqrtPrice = oldestSwap.args.sqrtPriceX96;
         if (oldestSqrtPrice) {
-          price24hAgo = getMstPriceFromSqrtPriceX96(oldestSqrtPrice, isWmstToken0);
+          price24hAgo = getMstPriceFromSqrtPriceX96(oldestSqrtPrice, isWmstToken0, wmstDec, usdcDec);
         }
       } else {
         // Fallback: search for last swap overall if no swaps in 24h
@@ -155,7 +188,7 @@ export async function getDynamicPoolDetails() {
           const lastSwap = allSwapLogs[allSwapLogs.length - 1];
           const lastSqrtPrice = lastSwap.args.sqrtPriceX96;
           if (lastSqrtPrice) {
-            price24hAgo = getMstPriceFromSqrtPriceX96(lastSqrtPrice, isWmstToken0);
+            price24hAgo = getMstPriceFromSqrtPriceX96(lastSqrtPrice, isWmstToken0, wmstDec, usdcDec);
           }
         }
       }
@@ -192,7 +225,9 @@ export async function getDynamicPoolDetails() {
     usdcReserve,
     liveMstPrice,
     apr,
-    change24h
+    change24h,
+    wmstDec,
+    usdcDec
   };
 }
 
@@ -224,13 +259,15 @@ export async function getDynamicPoolTransactions() {
     const txs: any[] = [];
     const poolDetails = await getDynamicPoolDetails();
     const liveMstPrice = poolDetails.liveMstPrice;
+    const wmstDec = poolDetails.wmstDec;
+    const usdcDec = poolDetails.usdcDec;
     const isWmstToken0 = wmstAddress.toLowerCase() < usdcAddress.toLowerCase();
 
     for (const log of swapLogs) {
       const { amount0, amount1, sender } = log.args;
       if (amount0 !== undefined && amount1 !== undefined) {
-        const amount0Dec = Number(formatUnits(amount0 < 0n ? -amount0 : amount0, 18));
-        const amount1Dec = Number(formatUnits(amount1 < 0n ? -amount1 : amount1, 18));
+        const amount0Dec = Number(formatUnits(amount0 < 0n ? -amount0 : amount0, isWmstToken0 ? wmstDec : usdcDec));
+        const amount1Dec = Number(formatUnits(amount1 < 0n ? -amount1 : amount1, isWmstToken0 ? usdcDec : wmstDec));
         const usdValue = isWmstToken0 ? amount1Dec : amount0Dec; // USDC is our dollar peg
 
         txs.push({
@@ -249,11 +286,11 @@ export async function getDynamicPoolTransactions() {
     for (const log of mintLogs) {
       const { amount0, amount1, owner } = log.args;
       if (amount0 !== undefined && amount1 !== undefined) {
-        const wmstDec = isWmstToken0 ? amount0 : amount1;
-        const usdcDec = isWmstToken0 ? amount1 : amount0;
+        const wmstDecAmount = isWmstToken0 ? amount0 : amount1;
+        const usdcDecAmount = isWmstToken0 ? amount1 : amount0;
 
-        const wmstAmount = Number(formatUnits(wmstDec, 18));
-        const usdcAmount = Number(formatUnits(usdcDec, 18));
+        const wmstAmount = Number(formatUnits(wmstDecAmount, wmstDec));
+        const usdcAmount = Number(formatUnits(usdcDecAmount, usdcDec));
         const usdValue = wmstAmount * liveMstPrice + usdcAmount;
 
         txs.push({
@@ -272,11 +309,11 @@ export async function getDynamicPoolTransactions() {
     for (const log of burnLogs) {
       const { amount0, amount1, owner } = log.args;
       if (amount0 !== undefined && amount1 !== undefined) {
-        const wmstDec = isWmstToken0 ? amount0 : amount1;
-        const usdcDec = isWmstToken0 ? amount1 : amount0;
+        const wmstDecAmount = isWmstToken0 ? amount0 : amount1;
+        const usdcDecAmount = isWmstToken0 ? amount1 : amount0;
 
-        const wmstAmount = Number(formatUnits(wmstDec, 18));
-        const usdcAmount = Number(formatUnits(usdcDec, 18));
+        const wmstAmount = Number(formatUnits(wmstDecAmount, wmstDec));
+        const usdcAmount = Number(formatUnits(usdcDecAmount, usdcDec));
         const usdValue = wmstAmount * liveMstPrice + usdcAmount;
 
         txs.push({

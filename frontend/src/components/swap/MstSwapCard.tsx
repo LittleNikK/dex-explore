@@ -59,7 +59,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
 
   const isDark = theme === "dark";
 
-  const [liveMstPrice, setLiveMstPrice] = useState<number>(1.85);
+  const [liveMstPrice, setLiveMstPrice] = useState<number>(0);
 
   useEffect(() => {
     let active = true;
@@ -269,13 +269,17 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     };
   }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi]);
 
-  // Derived exchange rates
   const exchangeRateString = useMemo(() => {
-    const priceIn = getTokenPrice(tokenIn);
-    const priceOut = getTokenPrice(tokenOut);
-    const rate = priceIn / priceOut;
-    return `1 ${tokenIn} = ${rate.toFixed(4).replace(/\.?0+$/, "")} ${tokenOut}`;
-  }, [tokenIn, tokenOut, liveMstPrice]);
+    if (!amountIn || !amountOut || Number(amountIn) <= 0 || Number(amountOut) <= 0) {
+      const priceIn = getTokenPrice(tokenIn);
+      const priceOut = getTokenPrice(tokenOut);
+      if (priceIn === 0 || priceOut === 0) return "";
+      const rate = priceIn / priceOut;
+      return `1 ${tokenIn} = ${rate.toFixed(6).replace(/\.?0+$/, "")} ${tokenOut}`;
+    }
+    const rate = Number(amountOut) / Number(amountIn);
+    return `1 ${tokenIn} = ${rate.toFixed(6).replace(/\.?0+$/, "")} ${tokenOut}`;
+  }, [tokenIn, tokenOut, amountIn, amountOut, liveMstPrice]);
 
   // Swapping inputs
   const handleFlipTokens = () => {

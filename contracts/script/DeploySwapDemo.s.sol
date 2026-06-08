@@ -43,7 +43,7 @@ contract DeploySwapDemo is Script {
             usdcAddress,
             deployer,
             DEFAULT_WMST_DEPOSIT,
-            10 * 1e6
+            DEFAULT_WMST_DEPOSIT
         );
 
         vm.stopBroadcast();
@@ -71,6 +71,13 @@ contract DeploySwapDemo is Script {
         uint256 usdcBal = usdc.balanceOf(deployer);
         console.log("USDC balance (whole units):", usdcBal / 1e6);
         console.log("USDC balance (micro units):", usdcBal % 1e6);
+
+        uint256 wmstBal = wmst.balanceOf(deployer);
+        if (wmstBal < wmstLiquidity) {
+            uint256 needed = wmstLiquidity - wmstBal;
+            console.log("Depositing native MST to wrap as WMST (wei):", needed);
+            wmst.deposit{value: needed}();
+        }
 
         wmst.approve(positionManagerAddress, type(uint256).max);
         usdc.approve(positionManagerAddress, type(uint256).max);

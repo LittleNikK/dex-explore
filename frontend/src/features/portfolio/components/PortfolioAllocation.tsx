@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { formatPortfolioUsd, formatAssetUsd, formatPortfolioPct } from "../utils/portfolio-format";
 import { displayTokenSymbol } from "@/config/contracts";

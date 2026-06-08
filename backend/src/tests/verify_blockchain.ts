@@ -94,7 +94,6 @@ async function verify() {
   console.log(`- Quoter V2:            ${addresses.QUOTER_V2_ADDRESS}`);
   console.log(`- factory:              ${addresses.V3_FACTORY_ADDRESS}`);
   console.log(`- LP State Storage:     ${addresses.LP_STATE_STORAGE_ADDRESS}`);
-  console.log(`- Testing Executor:     ${addresses.TESTING_EXECUTOR_ADDRESS}`);
   console.log(`- Pool Address:         ${addresses.POOL_ADDRESS}\n`);
 
   console.log("--------------------------------------------------");
@@ -160,31 +159,7 @@ async function verify() {
   console.log("\n--------------------------------------------------");
   console.log("4. TESTING EXECUTOR COMPATIBILITY");
   console.log("--------------------------------------------------");
-  
-  try {
-    const activeNft = await client.readContract({
-      address: addresses.TESTING_EXECUTOR_ADDRESS as Address,
-      abi: EXECUTOR_ABI,
-      functionName: "activeTokenId"
-    });
-
-    const connectedFactory = await client.readContract({
-      address: addresses.TESTING_EXECUTOR_ADDRESS as Address,
-      abi: EXECUTOR_ABI,
-      functionName: "factory"
-    });
-
-    console.log(`- TestingExecutor Active NFT ID:    ${activeNft}`);
-    console.log(`- TestingExecutor Factory:          ${connectedFactory}`);
-    
-    if (connectedFactory.toLowerCase() === addresses.V3_FACTORY_ADDRESS.toLowerCase()) {
-      console.log("  ✅ SUCCESS: TestingExecutor is properly connected to UniswapV3Factory!");
-    } else {
-      console.log("  ❌ MISMATCH: TestingExecutor factory address does not match!");
-    }
-  } catch (err) {
-    console.error("  ❌ FAILED: TestingExecutor verification failed!", err);
-  }
+  console.log("  ℹ️ NOTE: Testing Executor compatibility check bypassed (Testing Executor removed).");
 
   console.log("\n==================================================");
   console.log("            SMART CONTRACT AUDIT COMPLETE         ");

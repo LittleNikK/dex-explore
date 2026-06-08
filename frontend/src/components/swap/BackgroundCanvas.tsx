@@ -1,4 +1,5 @@
 import React, { useRef, useMemo, useEffect } from "react";
+import Prism from "./Prism";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useLocation } from "react-router-dom";
 import * as THREE from "three";
@@ -389,28 +390,22 @@ function LiquidityFlows() {
   );
 }
 
-export function BackgroundCanvas() {
-  const { theme } = useThemeStore();
-  const isDark = theme === "dark";
 
+
+export function BackgroundCanvas() {
   return (
     <div className="absolute inset-0 w-full h-full bg-transparent overflow-hidden pointer-events-none select-none z-0">
-      <Canvas
-        camera={{ position: [0, 0, 5], fov: 60 }}
-        dpr={[1, 1.5]}
-        gl={{
-          antialias: true,
-          alpha: true,
-          powerPreference: "high-performance"
-        }}
-        // Run canvas at full opacity for maximum visibility
-        className="w-full h-full opacity-100"
-      >
-        <AuroraBackground />
-        <LiquidityFlows />
-      </Canvas>
-      {/* Volumetric Scanlines Overlay - slightly reduced opacity to avoid obscuring bolder movement */}
-      <div className={`absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.12)_50%),linear-gradient(90deg,rgba(0,240,255,0.02),rgba(0,0,0,0),rgba(138,43,226,0.02))] bg-[size:100%_4px,6px_100%] pointer-events-none mix-blend-overlay ${isDark ? "opacity-20" : "opacity-8"}`} />
+      <Prism
+        animationType="rotate"
+        timeScale={0.5}
+        height={3.5}
+        baseWidth={5.5}
+        scale={3.6}
+        hueShift={0}
+        colorFrequency={1}
+        noise={0.5}
+        glow={1}
+      />
     </div>
   );
 }

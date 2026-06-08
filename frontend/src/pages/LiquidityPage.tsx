@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck } from "lucide-react";
+import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
 import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
+import { MstTokenModal } from "../components/swap/MstTokenModal";
 import { useThemeStore } from "../store/themeStore";
 import { getAmountsForLiquidity, getOtherAmountForToken } from "../utils/uniswap-math";
 
@@ -64,8 +66,22 @@ export default function LiquidityPage() {
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
 
-  const wmstToken = useMemo(() => getToken("WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst }, []);
-  const usdcToken = useMemo(() => getToken("USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc }, []);
+  const [tokenA_Symbol, setTokenA_Symbol] = useState("WMST");
+  const [tokenB_Symbol, setTokenB_Symbol] = useState("USDC");
+  const [modalOpen, setModalOpen] = useState<"A" | "B" | null>(null);
+
+  const handleTokenSelect = (symbol: string) => {
+    if (modalOpen === "A") {
+      if (symbol === tokenB_Symbol) setTokenB_Symbol(tokenA_Symbol);
+      setTokenA_Symbol(symbol);
+    } else if (modalOpen === "B") {
+      if (symbol === tokenA_Symbol) setTokenA_Symbol(tokenB_Symbol);
+      setTokenB_Symbol(symbol);
+    }
+  };
+
+  const wmstToken = useMemo(() => getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : CONTRACTS.wmst }, [tokenA_Symbol]);
+  const usdcToken = useMemo(() => getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : CONTRACTS.wmst }, [tokenB_Symbol]);
 
   // 1. Fetch live balances
   const [wmstBalance, setWmstBalance] = useState("0.00");
@@ -77,6 +93,18 @@ export default function LiquidityPage() {
 
   // View state: 'list' dashboard vs 'create' pool creator wizard
   const [currentView, setCurrentView] = useState<"list" | "create">("list");
+
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const viewParam = queryParams.get("view");
+
+  useEffect(() => {
+    if (viewParam === "create") {
+      setCurrentView("create");
+    } else if (viewParam === "list") {
+      setCurrentView("list");
+    }
+  }, [viewParam]);
 
   // Price references
   const [liveMstPrice, setLiveMstPrice] = useState<number>(0);
@@ -99,7 +127,7 @@ export default function LiquidityPage() {
 
       const val0 = amt0Formatted * getTokenPrice(token0Symbol);
       const val1 = amt1Formatted * getTokenPrice(token1Symbol);
-      
+
       total += (val0 + val1);
       if (pos.isInRange) active++;
     });
@@ -128,6 +156,12 @@ export default function LiquidityPage() {
   const [isWorking, setIsWorking] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [txHash, setTxHash] = useState("");
+  const [pendingAction, setPendingAction] = useState<"create" | "add" | "remove" | null>(null);
+
+  // Step-by-step pool initialization states
+  const [createSteps, setCreateSteps] = useState<any[]>([]);
+  const [activeCreateStepIndex, setActiveCreateStepIndex] = useState<number>(0);
+  const [loadingCreateSteps, setLoadingCreateSteps] = useState<boolean>(false);
 
   const isDark = theme === "dark";
 
@@ -146,13 +180,35 @@ export default function LiquidityPage() {
     return `$${valUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
-  const getV3Amounts = (val: string, inputSymbol: "WMST" | "USDC"): string => {
+  const getTickSpacing = (fee: number): number => {
+    if (fee === 100) return 1;
+    if (fee === 500) return 10;
+    if (fee === 3000) return 60;
+    if (fee === 10000) return 200;
+    return 60;
+  };
+
+  const alignTick = (tickStr: string, fee: number): number => {
+    const tick = Number(tickStr);
+    if (isNaN(tick)) return 0;
+    const spacing = getTickSpacing(fee);
+    let aligned = Math.round(tick / spacing) * spacing;
+    if (aligned < -887272) aligned = -887272;
+    if (aligned > 887272) aligned = 887272;
+    const remainder = aligned % spacing;
+    if (remainder !== 0) {
+      aligned = aligned - remainder;
+    }
+    return aligned;
+  };
+
+  const getV3Amounts = (val: string, inputSymbol: string): string => {
     if (!val || isNaN(Number(val)) || Number(val) < 0) return "";
     if (!isPoolInitialized || !poolSqrtPriceX96) return "";
 
     try {
-      const lowerTick = Number(initTickLower);
-      const upperTick = Number(initTickUpper);
+      const lowerTick = alignTick(initTickLower, initFee);
+      const upperTick = alignTick(initTickUpper, initFee);
       if (isNaN(lowerTick) || isNaN(upperTick)) return "";
 
       const wAddress = wmstToken.address as Address;
@@ -160,10 +216,10 @@ export default function LiquidityPage() {
       if (!wAddress || !uAddress) return "";
       const isWmstToken0 = wAddress.toLowerCase() < uAddress.toLowerCase();
 
-      const inputDecimals = inputSymbol === "WMST" ? wmstToken.decimals : usdcToken.decimals;
+      const inputDecimals = inputSymbol === tokenA_Symbol ? wmstToken.decimals : usdcToken.decimals;
       const amountRaw = parseUnits(val, inputDecimals);
 
-      const isInputToken0 = inputSymbol === "WMST" ? isWmstToken0 : !isWmstToken0;
+      const isInputToken0 = inputSymbol === tokenA_Symbol ? isWmstToken0 : !isWmstToken0;
       const inputTokenIndex = isInputToken0 ? 0 : 1;
 
       const otherAmountRaw = getOtherAmountForToken(
@@ -174,7 +230,7 @@ export default function LiquidityPage() {
         upperTick
       );
 
-      const otherDecimals = inputSymbol === "WMST" ? usdcToken.decimals : wmstToken.decimals;
+      const otherDecimals = inputSymbol === tokenA_Symbol ? usdcToken.decimals : wmstToken.decimals;
       const parsedNum = Number(formatUnits(otherAmountRaw, otherDecimals));
       return formatToPrecision(parsedNum, otherDecimals);
     } catch (err) {
@@ -186,9 +242,9 @@ export default function LiquidityPage() {
   useEffect(() => {
     if (creationMode === "existing" && isPoolInitialized && poolSqrtPriceX96) {
       if (initWmst && !isNaN(Number(initWmst))) {
-        setInitUsdc(getV3Amounts(initWmst, "WMST"));
+        setInitUsdc(getV3Amounts(initWmst, tokenA_Symbol));
       } else if (initUsdc && !isNaN(Number(initUsdc))) {
-        setInitWmst(getV3Amounts(initUsdc, "USDC"));
+        setInitWmst(getV3Amounts(initUsdc, tokenB_Symbol));
       }
     }
   }, [creationMode, isPoolInitialized, poolSqrtPriceX96, initTickLower, initTickUpper, usdcToken.decimals, wmstToken.decimals]);
@@ -247,7 +303,7 @@ export default function LiquidityPage() {
       }
       const valNum = Number(val);
       if (!isNaN(valNum) && isPoolInitialized) {
-        setInitUsdc(getV3Amounts(val, "WMST"));
+        setInitUsdc(getV3Amounts(val, tokenA_Symbol));
       }
     }
   };
@@ -261,7 +317,7 @@ export default function LiquidityPage() {
       }
       const valNum = Number(val);
       if (!isNaN(valNum) && isPoolInitialized) {
-        setInitWmst(getV3Amounts(val, "USDC"));
+        setInitWmst(getV3Amounts(val, tokenB_Symbol));
       }
     }
   };
@@ -353,6 +409,7 @@ export default function LiquidityPage() {
   };
 
   // Helper: Fetch all on-chain LP positions details
+  // Helper: Fetch all on-chain LP positions details from NPM directly
   const fetchLPState = async () => {
     if (!publicClient || !address || !isConnected) return;
     try {
@@ -368,8 +425,8 @@ export default function LiquidityPage() {
         return;
       }
 
-      // Query token IDs
-      const tokenIds: bigint[] = [];
+      const tempPositions: PositionItem[] = [];
+
       for (let i = 0n; i < npmBalance; i++) {
         try {
           const tokenId = await publicClient.readContract({
@@ -378,113 +435,90 @@ export default function LiquidityPage() {
             functionName: "tokenOfOwnerByIndex",
             args: [address, i]
           }) as bigint;
-          tokenIds.push(tokenId);
-        } catch (err) {
-          console.error("Error calling tokenOfOwnerByIndex in LiquidityPage", err);
-        }
-      }
 
-      // Fetch details for all positions in parallel
-      const fetchedPositions = await Promise.all(
-        tokenIds.map(async (tokenId) => {
-          try {
-            const positionInfo = await publicClient.readContract({
-              address: CONTRACTS.positionManager,
-              abi: nonfungiblePositionManagerAbi,
-              functionName: "positions",
-              args: [tokenId]
-            }) as any;
+          const positionInfo = await publicClient.readContract({
+            address: CONTRACTS.positionManager,
+            abi: nonfungiblePositionManagerAbi,
+            functionName: "positions",
+            args: [tokenId]
+          }) as any;
 
-            const token0 = positionInfo[2] as Address;
-            const token1 = positionInfo[3] as Address;
-            const fee = positionInfo[4] as number;
-            const tickLower = positionInfo[5] as number;
-            const tickUpper = positionInfo[6] as number;
-            const liquidity = positionInfo[7] as bigint;
-            const owed0 = positionInfo[10] as bigint;
-            const owed1 = positionInfo[11] as bigint;
+          const token0 = positionInfo[2] as Address;
+          const token1 = positionInfo[3] as Address;
+          const fee = positionInfo[4] as number;
+          const tickLower = positionInfo[5] as number;
+          const tickUpper = positionInfo[6] as number;
+          const liquidity = positionInfo[7] as bigint;
+          const owed0 = positionInfo[10] as bigint;
+          const owed1 = positionInfo[11] as bigint;
 
-            // Query factory for poolAddress
-            let poolAddr = "0x0000000000000000000000000000000000000000";
+          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
+          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
+
+          const poolAddr = await publicClient.readContract({
+            address: CONTRACTS.factory,
+            abi: uniswapV3FactoryAbi,
+            functionName: "getPool",
+            args: [token0, token1, fee]
+          }) as string;
+
+          let isInRange = false;
+          let poolSqrtPriceX96 = 0n;
+          let amount0 = 0n;
+          let amount1 = 0n;
+
+          if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
             try {
-              poolAddr = await publicClient.readContract({
-                address: CONTRACTS.factory,
-                abi: uniswapV3FactoryAbi,
-                functionName: "getPool",
-                args: [token0, token1, fee]
-              }) as string;
-            } catch (factoryErr) {
-              console.error("Error calling factory.getPool in LiquidityPage", factoryErr);
-            }
+              const slot0 = await publicClient.readContract({
+                address: poolAddr as Address,
+                abi: poolAbi,
+                functionName: "slot0"
+              }) as any;
+              const sqrtPriceX96 = slot0[0] as bigint;
+              const activeTick = slot0[1] as number;
 
-            // Resolve token info
-            const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || 
-                           { symbol: "USDC", decimals: 18, address: token0 };
-            const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || 
-                           { symbol: "WMST", decimals: 18, address: token1 };
+              poolSqrtPriceX96 = sqrtPriceX96;
+              isInRange = activeTick >= tickLower && activeTick <= tickUpper;
 
-            // Calculate reserves from slot0 of pool
-            let amount0 = 0n;
-            let amount1 = 0n;
-            let isInRange = false;
-            let poolSqrtPriceX96 = 0n;
-
-            if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
-              try {
-                const slot0 = await publicClient.readContract({
-                  address: poolAddr as Address,
-                  abi: poolAbi,
-                  functionName: "slot0"
-                });
-                const sqrtPriceX96 = slot0[0];
-                const activeTick = slot0[1];
-                
-                poolSqrtPriceX96 = sqrtPriceX96;
-                // Active range check
-                isInRange = activeTick >= tickLower && activeTick <= tickUpper;
-
-                const [calculatedAmt0, calculatedAmt1] = getAmountsForLiquidity(
+              if (liquidity > 0n) {
+                const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
                   liquidity,
                   sqrtPriceX96,
                   tickLower,
                   tickUpper
                 );
-                amount0 = calculatedAmt0;
-                amount1 = calculatedAmt1;
-              } catch (mathErr) {
-                console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
+                amount0 = calcAmt0;
+                amount1 = calcAmt1;
               }
+            } catch (mathErr) {
+              console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
             }
-
-            return {
-              tokenId,
-              liquidity,
-              token0,
-              token1,
-              fee,
-              tickLower,
-              tickUpper,
-              tokensOwed0: owed0,
-              tokensOwed1: owed1,
-              poolAddress: poolAddr,
-              amount0,
-              amount1,
-              isInRange,
-              token0Info: t0Info,
-              token1Info: t1Info,
-              poolSqrtPriceX96
-            } as PositionItem;
-          } catch (err) {
-            console.error(`Error querying details for tokenId ${tokenId}`, err);
-            return null;
           }
-        })
-      );
 
-      const validPositions = fetchedPositions.filter((p): p is PositionItem => p !== null);
-      // Sort positions descending by tokenId so latest is at the top
-      validPositions.sort((a, b) => (b.tokenId > a.tokenId ? 1 : b.tokenId < a.tokenId ? -1 : 0));
-      setPositions(validPositions);
+          tempPositions.push({
+            tokenId,
+            liquidity,
+            token0,
+            token1,
+            fee,
+            tickLower,
+            tickUpper,
+            tokensOwed0: owed0,
+            tokensOwed1: owed1,
+            poolAddress: poolAddr,
+            amount0,
+            amount1,
+            isInRange,
+            token0Info: t0Info as TokenConfig,
+            token1Info: t1Info as TokenConfig,
+            poolSqrtPriceX96
+          });
+        } catch (err) {
+          console.error(`Error querying details for tokenId index ${i}`, err);
+        }
+      }
+
+      setPositions(tempPositions);
     } catch (e) {
       console.error("Error fetching LP states in LiquidityPage", e);
     }
@@ -561,66 +595,173 @@ export default function LiquidityPage() {
     }
   };
 
-  // Action 1: Create Pool and Initialize Concentrated Liquidity
-  const handleInitializePool = async () => {
-    if (!isConnected || !address) return;
+  // Check and setup steps for pool creation
+  const checkCreateSteps = async () => {
+    if (!isConnected || !address || !publicClient || !initWmst || !initUsdc) {
+      setCreateSteps([]);
+      return;
+    }
+
+    setLoadingCreateSteps(true);
+    const wmstRaw = parseUnits(initWmst, wmstToken.decimals);
+    const usdcRaw = parseUnits(initUsdc, usdcToken.decimals);
+    const steps: any[] = [];
+
+    try {
+      const wmstAllowance = await publicClient.readContract({
+        address: wmstToken.address as Address,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address, CONTRACTS.positionManager]
+      });
+      if (wmstAllowance < wmstRaw) {
+        steps.push({
+          id: "approveWMST",
+          label: `Approve ${tokenA_Symbol}`,
+          description: `Allow NonfungiblePositionManager to spend your ${tokenA_Symbol}`,
+          tokenAddress: wmstToken.address,
+          amountRaw: wmstRaw,
+          symbol: tokenA_Symbol,
+          status: "idle"
+        });
+      }
+    } catch (e) {
+      console.error("Error reading WMST allowance:", e);
+    }
+
+    try {
+      const usdcAllowance = await publicClient.readContract({
+        address: usdcToken.address as Address,
+        abi: erc20Abi,
+        functionName: "allowance",
+        args: [address, CONTRACTS.positionManager]
+      });
+      if (usdcAllowance < usdcRaw) {
+        steps.push({
+          id: "approveUSDC",
+          label: `Approve ${tokenB_Symbol}`,
+          description: `Allow NonfungiblePositionManager to spend your ${tokenB_Symbol}`,
+          tokenAddress: usdcToken.address,
+          amountRaw: usdcRaw,
+          symbol: tokenB_Symbol,
+          status: "idle"
+        });
+      }
+    } catch (e) {
+      console.error("Error reading USDC allowance:", e);
+    }
+
+    steps.push({
+      id: "initialize",
+      label: "Create Pool & Mint Liquidity",
+      description: "Initialize the pool and mint your position",
+      status: "idle"
+    });
+
+    setCreateSteps(steps);
+    setActiveCreateStepIndex(0);
+    setLoadingCreateSteps(false);
+  };
+
+  const executeCreateStep = async (index: number) => {
+    const step = createSteps[index];
+    if (!step) return;
+
     if (!(await ensureMstChain())) {
       return;
     }
 
-    if (!initWmst || !initUsdc) {
-      setStatusText("Please provide WMST and USDC amounts to create pool.");
-      return;
-    }
-
+    // Set step to working
+    setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "working" } : s));
     setIsWorking(true);
     setTxHash("");
-    setStatusText("Preparing Pool Initialization...");
+    setStatusText(step.label + "...");
 
     try {
-      const wmstRaw = parseUnits(initWmst, wmstToken.decimals);
-      const usdcRaw = parseUnits(initUsdc, usdcToken.decimals);
+      if (step.id === "approveWMST" || step.id === "approveUSDC") {
+        const hash = await writeContractAsync({
+          address: step.tokenAddress,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [CONTRACTS.positionManager, step.amountRaw]
+        });
+        setTxHash(hash);
+        setStatusText(`Waiting for ${step.symbol} approval on-chain...`);
+        await publicClient?.waitForTransactionReceipt({ hash });
 
-      // Sort tokens numerically as Uniswap V3 requires token0 < token1
-      let t0 = wmstToken.address as Address;
-      let t1 = usdcToken.address as Address;
-      let amount0 = wmstRaw;
-      let amount1 = usdcRaw;
-      if (t0.toLowerCase() > t1.toLowerCase()) {
-        t0 = usdcToken.address as Address;
-        t1 = wmstToken.address as Address;
-        amount0 = usdcRaw;
-        amount1 = wmstRaw;
-      }
+        // Mark as completed
+        setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "completed" } : s));
+        setActiveCreateStepIndex(index + 1);
+        setStatusText(`${step.symbol} Approved!`);
+        fetchERC20Balances();
+      } else if (step.id === "initialize") {
+        const wmstRaw = parseUnits(initWmst, wmstToken.decimals);
+        const usdcRaw = parseUnits(initUsdc, usdcToken.decimals);
 
-      if (creationMode === "new") {
-        // BRAND NEW POOL: Only call createAndInitializePoolIfNecessary (no approvals needed since no tokens are deposited yet)
-        setStatusText("Initializing Uniswap V3 Pool in wallet...");
+        // Sort tokens numerically as Uniswap V3 requires token0 < token1
+        let t0 = wmstToken.address as Address;
+        let t1 = usdcToken.address as Address;
+        let amount0 = wmstRaw;
+        let amount1 = usdcRaw;
+        if (t0.toLowerCase() > t1.toLowerCase()) {
+          t0 = usdcToken.address as Address;
+          t1 = wmstToken.address as Address;
+          amount0 = usdcRaw;
+          amount1 = wmstRaw;
+        }
+
+        const dec0 = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? wmstToken.decimals : usdcToken.decimals;
+        const dec1 = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? wmstToken.decimals : usdcToken.decimals;
+
         const amount0Float = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? Number(initWmst) : Number(initUsdc);
         const amount1Float = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? Number(initWmst) : Number(initUsdc);
-        const priceRatio = amount1Float / amount0Float;
+        
+        const basePriceRatio = amount1Float / amount0Float;
+        const decimalAdjustment = 10 ** (dec1 - dec0);
+        const priceRatio = basePriceRatio * decimalAdjustment;
         const sqrtPrice = Math.sqrt(priceRatio);
         const Q96 = 2n ** 96n;
         const dynamicSqrtPriceX96 = BigInt(Math.floor(sqrtPrice * 1000000000000)) * Q96 / 1000000000000n;
 
-        const initHash = await writeContractAsync({
-          address: CONTRACTS.positionManager,
-          abi: nonfungiblePositionManagerAbi,
-          functionName: "createAndInitializePoolIfNecessary",
-          args: [t0, t1, initFee, dynamicSqrtPriceX96]
-        });
+        // Check if pool is already initialized on factory
+        let poolAddr = await publicClient?.readContract({
+          address: CONTRACTS.factory,
+          abi: uniswapV3FactoryAbi,
+          functionName: "getPool",
+          args: [t0, t1, initFee]
+        }) as Address;
 
-        setTxHash(initHash);
-        setStatusText("Waiting for pool initialization confirmation...");
-        await publicClient?.waitForTransactionReceipt({ hash: initHash });
-        setStatusText("Pool successfully created and initialized on-chain!");
-      } else {
-        // PRE-EXISTING POOL: Approve tokens and mint position NFT
-        await approveTokenIfNeeded(wmstToken.address as Address, wmstRaw, "WMST");
-        await approveTokenIfNeeded(usdcToken.address as Address, usdcRaw, "USDC");
+        let isInitializedOnChain = false;
+        if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+          try {
+            const slot0 = await publicClient?.readContract({
+              address: poolAddr,
+              abi: poolAbi,
+              functionName: "slot0"
+            }) as any;
+            if (slot0 && slot0[0] > 0n) {
+              isInitializedOnChain = true;
+            }
+          } catch (e) {
+            console.log("Pool not initialized yet");
+          }
+        }
 
-        setStatusText("Confirming liquidity minting in wallet...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
+        if (!isInitializedOnChain) {
+          setStatusText("Initializing Pool on-chain...");
+          const initPoolHash = await writeContractAsync({
+            address: CONTRACTS.positionManager,
+            abi: nonfungiblePositionManagerAbi,
+            functionName: "createAndInitializePoolIfNecessary",
+            args: [t0, t1, initFee, dynamicSqrtPriceX96]
+          });
+          setStatusText("Waiting for pool initialization transaction...");
+          await publicClient?.waitForTransactionReceipt({ hash: initPoolHash });
+        }
+
+        setStatusText("Minting position via NonfungiblePositionManager...");
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200); // 20 mins
+
         const mintHash = await writeContractAsync({
           address: CONTRACTS.positionManager,
           abi: nonfungiblePositionManagerAbi,
@@ -630,37 +771,43 @@ export default function LiquidityPage() {
               token0: t0,
               token1: t1,
               fee: initFee,
-              tickLower: Number(initTickLower),
-              tickUpper: Number(initTickUpper),
+              tickLower: alignTick(initTickLower, initFee),
+              tickUpper: alignTick(initTickUpper, initFee),
               amount0Desired: amount0,
               amount1Desired: amount1,
               amount0Min: 0n,
               amount1Min: 0n,
               recipient: address as Address,
-              deadline
+              deadline: deadline
             }
           ]
         });
 
         setTxHash(mintHash);
-        setStatusText("Submitting concentrated liquidity mint to MST Blockchain...");
+        setStatusText("Waiting for position mint confirmation...");
         await publicClient?.waitForTransactionReceipt({ hash: mintHash });
-        setStatusText("Concentrated liquidity successfully minted!");
-      }
 
-      setInitWmst("");
-      setInitUsdc("");
-      fetchLPState();
-      fetchERC20Balances();
-      
-      // Auto return back to dashboard list
-      setTimeout(() => {
-        setCurrentView("list");
-      }, 1500);
+        // Mark as completed
+        setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "completed" } : s));
+        setStatusText("Pool initialized and liquidity minted successfully!");
+
+        setInitWmst("");
+        setInitUsdc("");
+        fetchLPState();
+        fetchERC20Balances();
+
+        // Auto close and go back to list
+        setTimeout(() => {
+          setPendingAction(null);
+          setCurrentView("list");
+          setStatusText("");
+        }, 1500);
+      }
     } catch (err) {
       console.error(err);
-      const msg = err instanceof Error ? err.message : "Initialization failed.";
+      const msg = err instanceof Error ? err.message : "Step failed.";
       setStatusText(msg.substring(0, 80));
+      setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "failed", error: msg.substring(0, 80) } : s));
     } finally {
       setIsWorking(false);
     }
@@ -705,8 +852,9 @@ export default function LiquidityPage() {
       }
 
       // Step B: Call increaseLiquidity on NonfungiblePositionManager
-      setStatusText("Confirming active range addition in wallet...");
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
+      setStatusText("Confirming liquidity addition in wallet...");
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200); // 20 mins deadline
+
       const hash = await writeContractAsync({
         address: CONTRACTS.positionManager,
         abi: nonfungiblePositionManagerAbi,
@@ -714,11 +862,11 @@ export default function LiquidityPage() {
         args: [
           {
             tokenId: expandedPosition.tokenId,
-            amount0Desired,
-            amount1Desired,
+            amount0Desired: amount0Desired,
+            amount1Desired: amount1Desired,
             amount0Min: 0n,
             amount1Min: 0n,
-            deadline
+            deadline: deadline
           }
         ]
       });
@@ -755,9 +903,10 @@ export default function LiquidityPage() {
 
     try {
       const liqToRemove = (expandedPosition.liquidity * BigInt(removePercent)) / 100n;
-      
-      setStatusText(`Confirming removal of ${removePercent}% liquidity in wallet...`);
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200);
+
+      setStatusText(`Confirming removal of ${removePercent}% liquidity...`);
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200); // 20 mins
+
       const decreaseHash = await writeContractAsync({
         address: CONTRACTS.positionManager,
         abi: nonfungiblePositionManagerAbi,
@@ -768,15 +917,17 @@ export default function LiquidityPage() {
             liquidity: liqToRemove,
             amount0Min: 0n,
             amount1Min: 0n,
-            deadline
+            deadline: deadline
           }
         ]
       });
 
-      setStatusText("Confirming liquidity reduction on-chain...");
+      setTxHash(decreaseHash);
+      setStatusText("Waiting for decrease liquidity transaction receipt...");
       await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
 
-      setStatusText("Withdrawing principal tokens from pool...");
+      // Now collect the tokens from decrease liquidity
+      setStatusText("Collecting tokens from position...");
       const collectHash = await writeContractAsync({
         address: CONTRACTS.positionManager,
         abi: nonfungiblePositionManagerAbi,
@@ -784,18 +935,18 @@ export default function LiquidityPage() {
         args: [
           {
             tokenId: expandedPosition.tokenId,
-            recipient: address as Address,
-            amount0Max: 340282366920938463463374607431768211455n, // uint128 max
-            amount1Max: 340282366920938463463374607431768211455n
+            recipient: address,
+            amount0Max: 340282366920938463463374607431768211455n, // type(uint128).max
+            amount1Max: 340282366920938463463374607431768211455n  // type(uint128).max
           }
         ]
       });
 
       setTxHash(collectHash);
-      setStatusText("Reclaiming principal tokens back to your wallet...");
+      setStatusText("Waiting for token collection receipt...");
       await publicClient?.waitForTransactionReceipt({ hash: collectHash });
 
-      setStatusText("Liquidity successfully removed!");
+      setStatusText("Liquidity successfully removed and tokens collected!");
       fetchLPState();
       fetchERC20Balances();
     } catch (err) {
@@ -829,15 +980,15 @@ export default function LiquidityPage() {
         args: [
           {
             tokenId: expandedPosition.tokenId,
-            recipient: address as Address,
-            amount0Max: 340282366920938463463374607431768211455n, // uint128 max
-            amount1Max: 340282366920938463463374607431768211455n
+            recipient: address,
+            amount0Max: 340282366920938463463374607431768211455n, // type(uint128).max
+            amount1Max: 340282366920938463463374607431768211455n  // type(uint128).max
           }
         ]
       });
 
       setTxHash(hash);
-      setStatusText("Withdrawing fees from Uniswap V3 Pool...");
+      setStatusText("Withdrawing fees from NonfungiblePositionManager...");
       await publicClient?.waitForTransactionReceipt({ hash });
       setStatusText("Accrued LP fees successfully collected!");
       fetchLPState();
@@ -852,21 +1003,13 @@ export default function LiquidityPage() {
   };
 
   return (
-    <div
-      className={`min-h-[calc(100vh-72px)] relative font-sans transition-colors duration-300 ease-in-out select-none overflow-x-hidden pb-24 ${
-        isDark ? "bg-[#0b0f19] text-white" : "bg-[#f8fafc] text-zinc-950"
-      }`}
-    >
-      {/* Dynamic ambient backgrounds */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-gradient-to-tr from-cyan-500/10 to-transparent blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-gradient-to-bl from-purple-500/10 to-transparent blur-[120px] pointer-events-none" />
+    <div className="relative min-h-screen px-4 pb-20 pt-10 overflow-hidden font-sans">
+      <main className="relative z-10 max-w-[1000px] mx-auto space-y-8">
 
-      <main className="relative z-10 px-4 pt-12 md:pt-16 max-w-[1000px] mx-auto space-y-8">
-        
         {/* VIEW 1: POSITIONS LIST DASHBOARD */}
         {currentView === "list" && (
           <div className="space-y-6">
-            
+
             {/* Dashboard Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="space-y-2">
@@ -909,8 +1052,8 @@ export default function LiquidityPage() {
                   whileTap={{ scale: 0.98 }}
                   onClick={() => setCurrentView("create")}
                   className={`flex items-center gap-2.5 py-4 px-6 rounded-xl font-bold text-base transition-all shadow-lg
-                    ${isDark 
-                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/15" 
+                    ${isDark
+                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/15"
                       : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white shadow-blue-500/10"}`}
                 >
                   <Plus size={20} />
@@ -926,8 +1069,18 @@ export default function LiquidityPage() {
                 animate={{ opacity: 1, y: 0 }}
                 className="grid grid-cols-1 md:grid-cols-3 gap-5"
               >
-                <div className={`p-6 rounded-2xl border backdrop-blur-md relative overflow-hidden
-                  ${isDark ? "bg-[#131A2A]/50 border-[#2C364F]/30" : "bg-white border-zinc-200/80 shadow-sm"}`}>
+                <div
+                  className={`p-6 rounded-[30px] border shadow-2xl relative backdrop-blur-2xl transition-all duration-300 overflow-hidden hover:-translate-y-0.5
+                    ${isDark
+                      ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+                      : "bg-white/80 border-zinc-200 text-zinc-950"
+                    }`}
+                  style={{
+                    boxShadow: isDark
+                      ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                      : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                  }}
+                >
                   <div className="absolute top-[-30px] right-[-30px] w-20 h-20 bg-gradient-to-br from-cyan-500/10 to-transparent rounded-full blur-xl pointer-events-none" />
                   <p className={`text-xs font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
                     Total Deposited Value (TVL)
@@ -938,8 +1091,8 @@ export default function LiquidityPage() {
                   <p className="text-xs text-zinc-500 mt-1">Valuation based on live MST/USDC rates</p>
                 </div>
 
-                <div className={`p-6 rounded-2xl border backdrop-blur-md relative overflow-hidden
-                  ${isDark ? "bg-[#131A2A]/50 border-[#2C364F]/30" : "bg-white border-zinc-200/80 shadow-sm"}`}>
+                <div className={`glass p-6 rounded-3xl border transition-all duration-300 hover:-translate-y-0.5 hover:shadow-float relative overflow-hidden
+                  ${isDark ? "bg-[#131A2A]/50 border-[#2C364F]/40 text-white shadow-xl shadow-black/10" : "bg-white/70 border-zinc-200/50 text-zinc-950 shadow-md shadow-black/5"}`}>
                   <div className="absolute top-[-30px] right-[-30px] w-20 h-20 bg-gradient-to-br from-emerald-500/10 to-transparent rounded-full blur-xl pointer-events-none" />
                   <p className={`text-xs font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
                     Active Ranges
@@ -950,8 +1103,8 @@ export default function LiquidityPage() {
                   <p className="text-xs text-zinc-500 mt-1">Positions earning swap fees right now</p>
                 </div>
 
-                <div className={`p-6 rounded-2xl border backdrop-blur-md relative overflow-hidden
-                  ${isDark ? "bg-[#131A2A]/50 border-[#2C364F]/30" : "bg-white border-zinc-200/80 shadow-sm"}`}>
+                <div className={`glass p-6 rounded-3xl border transition-all duration-300 hover:-translate-y-0.5 hover:shadow-float relative overflow-hidden
+                  ${isDark ? "bg-[#131A2A]/50 border-[#2C364F]/40 text-white shadow-xl shadow-black/10" : "bg-white/70 border-zinc-200/50 text-zinc-950 shadow-md shadow-black/5"}`}>
                   <div className="absolute top-[-30px] right-[-30px] w-20 h-20 bg-gradient-to-br from-purple-500/10 to-transparent rounded-full blur-xl pointer-events-none" />
                   <p className={`text-xs font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
                     LP Positions Owned
@@ -966,15 +1119,23 @@ export default function LiquidityPage() {
 
             {/* Positions container */}
             <div className="space-y-4">
-              
+
               {positions === null ? (
                 // Pulse loading skeleton list
                 <div className="space-y-4">
                   {[1, 2].map((i) => (
                     <div
                       key={i}
-                      className={`p-6 rounded-2xl border animate-pulse flex flex-col gap-4
-                        ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200"}`}
+                      className={`p-6 rounded-[30px] border animate-pulse flex flex-col gap-4 transition-all duration-300 backdrop-blur-2xl
+                        ${isDark
+                          ? "bg-[#0b0b14]/75 border-zinc-800/60"
+                          : "bg-white/80 border-zinc-200"
+                        }`}
+                      style={{
+                        boxShadow: isDark
+                          ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                          : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                      }}
                     >
                       <div className="flex justify-between items-center">
                         <div className="flex items-center gap-3">
@@ -992,8 +1153,16 @@ export default function LiquidityPage() {
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`p-16 rounded-2xl border text-center backdrop-blur-md flex flex-col items-center justify-center gap-6
-                    ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200 shadow-sm"}`}
+                  className={`p-16 rounded-[30px] border text-center flex flex-col items-center justify-center gap-6 shadow-2xl relative backdrop-blur-2xl transition-all duration-300
+                    ${isDark
+                      ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+                      : "bg-white/80 border-zinc-200 text-zinc-950"
+                    }`}
+                  style={{
+                    boxShadow: isDark
+                      ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                      : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                  }}
                 >
                   <div className={`p-5 rounded-2xl ${isDark ? "bg-cyan-500/10 text-cyan-400" : "bg-cyan-50 text-cyan-600"}`}>
                     <Coins size={48} />
@@ -1034,11 +1203,16 @@ export default function LiquidityPage() {
                     return (
                       <div
                         key={pos.tokenId.toString()}
-                        className={`rounded-2xl border transition-all duration-300 backdrop-blur-md overflow-hidden
-                          ${isExpanded 
-                            ? isDark ? "bg-[#131a2c]/85 border-cyan-500/50 shadow-xl shadow-cyan-500/5" : "bg-white border-cyan-500/40 shadow-xl"
-                            : isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30 hover:border-cyan-500/35" : "bg-white border-zinc-200 shadow-sm hover:border-zinc-300"
+                        className={`rounded-[30px] border relative backdrop-blur-2xl transition-all duration-300 overflow-hidden shadow-2xl
+                          ${isExpanded
+                            ? isDark ? "bg-[#0b0b14]/90 border-cyan-500/50 shadow-cyan-500/10" : "bg-white/95 border-cyan-500/40"
+                            : isDark ? "bg-[#0b0b14]/75 border-zinc-800/60 hover:border-zinc-700/80" : "bg-white/80 border-zinc-200 hover:border-zinc-300"
                           }`}
+                        style={{
+                          boxShadow: isDark
+                            ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                            : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                        }}
                       >
                         {/* Header details block (Always visible, triggers expand/collapse on click) */}
                         <div
@@ -1112,7 +1286,7 @@ export default function LiquidityPage() {
                               className="overflow-hidden border-t border-[#2C364F]/30"
                             >
                               <div className="p-6 md:p-8 space-y-8 bg-zinc-950/20">
-                                
+
                                 {/* 1. Detailed underlying reserves */}
                                 <div className="space-y-3">
                                   <h4 className={`text-sm uppercase tracking-wider font-bold ${isDark ? "text-zinc-400" : "text-zinc-505"}`}>
@@ -1210,14 +1384,14 @@ export default function LiquidityPage() {
 
                                 {/* 3. Inner Actions Layout (Add, Remove and Collect side-by-side/stacked) */}
                                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-4 border-t border-[#2C364F]/20">
-                                  
+
                                   {/* Actions column: Add/Increase Liquidity (Spans 6) */}
                                   <div className="lg:col-span-6 space-y-4">
                                     <h5 className="text-base font-bold flex items-center gap-2 text-emerald-400">
                                       <span className="w-1.5 h-4 bg-emerald-400 rounded-full" />
                                       Increase Liquidity
                                     </h5>
-                                    
+
                                     <div className="grid grid-cols-2 gap-4">
                                       <div>
                                         <label className={`block text-xs font-bold mb-1.5 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
@@ -1330,7 +1504,7 @@ export default function LiquidityPage() {
                                         </h5>
                                         <span className="text-sm font-black text-red-400">{removePercent}%</span>
                                       </div>
-                                      
+
                                       <div className="space-y-2">
                                         <input
                                           type="range"
@@ -1371,7 +1545,7 @@ export default function LiquidityPage() {
                                           onClick={handleCollectFees}
                                           disabled={isWorking}
                                           className={`py-2 px-4 rounded-lg font-bold text-xs transition-all active:scale-[0.98]
-                                            ${isWorking 
+                                            ${isWorking
                                               ? isDark ? "bg-amber-500/10 text-amber-500/40" : "bg-amber-500/10 text-amber-600/40"
                                               : isDark ? "bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 shadow-md shadow-amber-500/5" : "bg-amber-500/15 hover:bg-amber-500/25 text-amber-600 shadow-md shadow-amber-500/5"
                                             }`}
@@ -1424,7 +1598,7 @@ export default function LiquidityPage() {
             animate={{ opacity: 1, y: 0 }}
             className="max-w-[650px] mx-auto space-y-6"
           >
-            
+
             {/* Navigation back and header */}
             <div className="flex items-center gap-3">
               <button
@@ -1443,44 +1617,22 @@ export default function LiquidityPage() {
 
             {/* Creation Wizard Card */}
             <div
-              className={`p-8 rounded-2xl border backdrop-blur-md relative
-                ${isDark ? "bg-[#131A2A]/70 border-[#2C364F]/50 shadow-2xl" : "bg-white border-zinc-200/80 shadow-xl"}`}
+              className={`p-8 rounded-[30px] border shadow-2xl relative backdrop-blur-2xl transition-all duration-300 overflow-visible
+                ${isDark
+                  ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+                  : "bg-white/80 border-zinc-200 text-zinc-950"
+                }`}
+              style={{
+                boxShadow: isDark
+                  ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                  : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+              }}
             >
-              <div className="absolute -right-40 -top-40 w-80 h-80 bg-gradient-to-bl from-purple-500/10 to-transparent rounded-full blur-3xl pointer-events-none" />
 
               <div className="relative z-10 space-y-6">
 
-                 {/* Creation Mode Tabs */}
-                 <div className="flex rounded-xl p-1 bg-zinc-950/15 dark:bg-[#1B2236]/40 border border-zinc-200/50 dark:border-[#2C364F]/30">
-                   <button
-                     type="button"
-                     onClick={() => setCreationMode("new")}
-                     className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all
-                       ${creationMode === "new"
-                         ? isDark 
-                           ? "bg-[#1d293d] text-cyan-400 border border-cyan-500/30" 
-                           : "bg-white text-zinc-900 border border-zinc-200 shadow-sm"
-                         : "text-zinc-550 hover:text-zinc-400 dark:hover:text-white"
-                       }`}
-                   >
-                     Create Brand New Pool
-                   </button>
-                   <button
-                     type="button"
-                     onClick={() => setCreationMode("existing")}
-                     className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all
-                       ${creationMode === "existing"
-                         ? isDark 
-                           ? "bg-[#1d293d] text-cyan-400 border border-cyan-500/30" 
-                           : "bg-white text-zinc-900 border border-zinc-200 shadow-sm"
-                         : "text-zinc-550 hover:text-zinc-400 dark:hover:text-white"
-                       }`}
-                   >
-                     Add to Pre-existing Pool
-                   </button>
-                 </div>
 
-                 {/* 1. Fee Tier Selector */}
+                {/* 1. Fee Tier Selector */}
                 <div>
                   <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
                     Pool Fee Tier
@@ -1510,54 +1662,74 @@ export default function LiquidityPage() {
                 <div className="space-y-4">
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial WMST amount</label>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial {tokenA_Symbol} amount</label>
                       <span className="text-xs font-mono text-zinc-550">Bal: {wmstBalance}</span>
                     </div>
-                    <div className="relative">
+                    <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
+                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}`}
+                    >
                       <input
                         type="text"
                         placeholder="0.0"
                         value={initWmst}
                         onChange={(e) => handleInitWmstChange(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-4 px-4 rounded-xl border text-base font-medium outline-none bg-transparent transition
-                          ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
+                        className="w-full bg-transparent border-none outline-none text-base font-medium"
                       />
-                      <div className="absolute right-4 top-4 flex items-center gap-1.5">
-                        <TokenLogo symbol="WMST" size={20} />
-                        <span className="text-sm font-bold">WMST</span>
-                      </div>
+                      <button
+                        onClick={() => setModalOpen("A")}
+                        disabled={isWorking}
+                        className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
+                          ${isDark
+                            ? "bg-[#181930] hover:bg-zinc-800 text-white"
+                            : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
+                          }`}
+                      >
+                        <TokenLogo symbol={tokenA_Symbol} size={20} />
+                        <span>{tokenA_Symbol}</span>
+                        <ChevronDown size={14} className="opacity-60" />
+                      </button>
                     </div>
                     {initWmst !== "" && (Number(initWmst) <= 0 || isNaN(Number(initWmst))) && (
                       <span className="text-xs text-red-500 mt-1.5 block font-semibold">
-                        WMST amount must be a positive number.
+                        {tokenA_Symbol} amount must be a positive number.
                       </span>
                     )}
                   </div>
 
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial USDC amount</label>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial {tokenB_Symbol} amount</label>
                       <span className="text-xs font-mono text-zinc-550">Bal: {usdcBalance}</span>
                     </div>
-                    <div className="relative">
+                    <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
+                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}`}
+                    >
                       <input
                         type="text"
                         placeholder="0.0"
                         value={initUsdc}
                         onChange={(e) => handleInitUsdcChange(e.target.value)}
                         disabled={isWorking}
-                        className={`w-full py-4 px-4 rounded-xl border text-base font-medium outline-none bg-transparent transition
-                          ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
+                        className="w-full bg-transparent border-none outline-none text-base font-medium"
                       />
-                      <div className="absolute right-4 top-4 flex items-center gap-1.5">
-                        <TokenLogo symbol="USDC" size={20} />
-                        <span className="text-sm font-bold">USDC</span>
-                      </div>
+                      <button
+                        onClick={() => setModalOpen("B")}
+                        disabled={isWorking}
+                        className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
+                          ${isDark
+                            ? "bg-[#181930] hover:bg-zinc-800 text-white"
+                            : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
+                          }`}
+                      >
+                        <TokenLogo symbol={tokenB_Symbol} size={20} />
+                        <span>{tokenB_Symbol}</span>
+                        <ChevronDown size={14} className="opacity-60" />
+                      </button>
                     </div>
                     {initUsdc !== "" && (Number(initUsdc) <= 0 || isNaN(Number(initUsdc))) && (
                       <span className="text-xs text-red-500 mt-1.5 block font-semibold">
-                        USDC amount must be a positive number.
+                        {tokenB_Symbol} amount must be a positive number.
                       </span>
                     )}
                   </div>
@@ -1637,32 +1809,33 @@ export default function LiquidityPage() {
                   )
                 )}
 
-                {/* Action button */}
                 <button
-                  onClick={handleInitializePool}
+                  onClick={() => {
+                    checkCreateSteps();
+                    setPendingAction("create");
+                  }}
                   disabled={
-                    isWorking || 
-                    !initWmst || 
-                    !initUsdc || 
+                    isWorking ||
+                    !initWmst ||
+                    !initUsdc ||
                     Number(initWmst) <= 0 ||
                     Number(initUsdc) <= 0 ||
                     (creationMode === "existing" && !isPoolInitialized)
                   }
                   className={`w-full py-4.5 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
-                    ${
-                      isWorking || 
-                      !initWmst || 
-                      !initUsdc || 
+                    ${isWorking ||
+                      !initWmst ||
+                      !initUsdc ||
                       Number(initWmst) <= 0 ||
                       Number(initUsdc) <= 0 ||
                       (creationMode === "existing" && !isPoolInitialized)
-                        ? isDark ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400/40 cursor-not-allowed" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
-                        : isDark 
-                          ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/15" 
-                          : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white shadow-lg shadow-blue-500/10"
+                      ? isDark ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400/40 cursor-not-allowed" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+                      : isDark
+                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/15"
+                        : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white shadow-lg shadow-blue-500/10"
                     }`}
                 >
-                  {isWorking 
+                  {isWorking
                     ? creationMode === "new" ? "Initializing Pool..." : "Adding Position..."
                     : creationMode === "new" ? "Initialize & Deploy" : "Add Position"
                   }
@@ -1685,10 +1858,9 @@ export default function LiquidityPage() {
             >
               <div
                 className={`p-5 rounded-2xl border backdrop-blur-sm text-sm font-medium leading-relaxed shadow-lg
-                  ${
-                    statusText.includes("minted") || statusText.includes("added") || statusText.includes("removed") || statusText.includes("collected") || statusText.includes("successfully")
-                      ? isDark ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-emerald-500/5" : "bg-emerald-50 border-emerald-500/20 text-emerald-800"
-                      : isDark ? "bg-blue-500/10 border-blue-500/30 text-blue-400 shadow-blue-500/5" : "bg-blue-50 border-blue-500/20 text-blue-800"
+                  ${statusText.includes("minted") || statusText.includes("added") || statusText.includes("removed") || statusText.includes("collected") || statusText.includes("successfully")
+                    ? isDark ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-emerald-500/5" : "bg-emerald-50 border-emerald-500/20 text-emerald-800"
+                    : isDark ? "bg-blue-500/10 border-blue-500/30 text-blue-400 shadow-blue-500/5" : "bg-blue-50 border-blue-500/20 text-blue-800"
                   }`}
               >
                 <div className="flex items-center justify-between mb-1.5">
@@ -1705,10 +1877,10 @@ export default function LiquidityPage() {
                 </div>
                 {txHash && (
                   <div className="text-xs font-mono mt-2 pt-2 border-t border-current/10">
-                    <a 
-                      href={`https://testnet.mstscan.com/tx/${txHash}`} 
-                      target="_blank" 
-                      rel="noreferrer" 
+                    <a
+                      href={`https://testnet.mstscan.com/tx/${txHash}`}
+                      target="_blank"
+                      rel="noreferrer"
                       className="flex items-center gap-1.5 hover:underline"
                     >
                       Tx hash: {txHash.slice(0, 18)}...{txHash.slice(-14)}
@@ -1720,6 +1892,169 @@ export default function LiquidityPage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Review Transaction Modal */}
+        <AnimatePresence>
+          {pendingAction && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+              {/* Backdrop */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => {
+                  if (!isWorking) {
+                    setPendingAction(null);
+                    setCreateSteps([]);
+                  }
+                }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-md"
+              />
+
+              {/* Modal Card */}
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className={`relative w-full max-w-md rounded-[30px] p-6 shadow-2xl border
+                  ${isDark ? "bg-[#0b0b14]/95 border-zinc-800/80 text-white" : "bg-white/95 border-zinc-200 text-zinc-900"}
+                `}
+                style={{
+                  boxShadow: isDark
+                    ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                    : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                }}
+              >
+                <div className="flex items-center justify-between mb-5">
+                  <h3 className="text-xl font-bold">Review Transaction</h3>
+                  <button
+                    onClick={() => {
+                      if (!isWorking) {
+                        setPendingAction(null);
+                        setCreateSteps([]);
+                      }
+                    }}
+                    className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {pendingAction === "create" && (
+                  <div className="mb-6 space-y-4">
+                    <p className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                      You are about to initiate a blockchain transaction. Please review the details below.
+                    </p>
+                    <div className={`p-4 rounded-2xl border space-y-3 font-medium text-sm
+                      ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/50" : "bg-zinc-50 border-zinc-200"}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">Action</span>
+                        <span className="font-bold text-cyan-500">Create Pool & Add Liquidity</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">{tokenA_Symbol} Amount</span>
+                        <span className="font-bold">{initWmst}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">{tokenB_Symbol} Amount</span>
+                        <span className="font-bold">{initUsdc}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">Fee Tier</span>
+                        <span className="font-bold">{(initFee / 10000).toFixed(2)}%</span>
+                      </div>
+                    </div>
+
+                    {/* Step-by-Step Confirmations Container */}
+                    <div className="space-y-3 pt-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
+                        Required Steps
+                      </h4>
+
+                      {loadingCreateSteps ? (
+                        <div className="flex items-center justify-center py-6 gap-2">
+                          <Loader2 className="animate-spin text-cyan-400 h-5 w-5" />
+                          <span className="text-xs font-mono text-zinc-500">Estimating required steps...</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {createSteps.map((step, idx) => {
+                            const isCompleted = step.status === "completed";
+                            const isCurrent = idx === activeCreateStepIndex;
+                            const isWorkingStep = step.status === "working";
+                            const isFailed = step.status === "failed";
+
+                            return (
+                              <div
+                                key={step.id}
+                                className={`flex items-start justify-between p-3.5 rounded-2xl border transition-all duration-300
+                                  ${isCompleted
+                                    ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400"
+                                    : isCurrent
+                                      ? isDark ? "bg-[#1C2438] border-cyan-500/30 text-white" : "bg-cyan-50 border-cyan-300 text-zinc-900"
+                                      : "bg-transparent border-zinc-800/40 text-zinc-550 opacity-60"
+                                  }`}
+                              >
+                                <div className="flex gap-3 min-w-0">
+                                  <div className="mt-0.5 shrink-0">
+                                    {isCompleted ? (
+                                      <CheckCircle2 size={18} className="text-emerald-400" />
+                                    ) : isWorkingStep ? (
+                                      <Loader2 size={18} className="text-cyan-400 animate-spin" />
+                                    ) : isFailed ? (
+                                      <XCircle size={18} className="text-rose-500" />
+                                    ) : (
+                                      <div className={`h-5 w-5 rounded-full border-2 flex items-center justify-center text-[10px] font-bold
+                                        ${isCurrent ? "border-cyan-400 text-cyan-400" : "border-zinc-600 text-zinc-650"}`}
+                                      >
+                                        {idx + 1}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-bold truncate">{step.label}</div>
+                                    <div className="text-xs text-zinc-500 mt-0.5 leading-relaxed">{step.description}</div>
+                                    {step.error && (
+                                      <div className="text-[11px] font-bold text-rose-500 mt-1 font-mono break-words">{step.error}</div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Active step action button */}
+                                {isCurrent && !isWorking && (
+                                  <button
+                                    onClick={() => executeCreateStep(idx)}
+                                    className={`ml-3 py-1.5 px-4 rounded-xl text-xs font-bold transition-all active:scale-95 shrink-0
+                                      ${isDark
+                                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-md shadow-cyan-500/10"
+                                        : "bg-cyan-500 hover:bg-cyan-600 text-white"
+                                      }`}
+                                  >
+                                    {step.id.startsWith("approve") ? "Approve" : "Confirm"}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* MstTokenModal rendering */}
+        <MstTokenModal
+          isOpen={modalOpen !== null}
+          onClose={() => setModalOpen(null)}
+          onSelect={handleTokenSelect}
+          selectedToken={modalOpen === "A" ? tokenA_Symbol : (modalOpen === "B" ? tokenB_Symbol : "")}
+          theme={theme}
+        />
 
       </main>
     </div>

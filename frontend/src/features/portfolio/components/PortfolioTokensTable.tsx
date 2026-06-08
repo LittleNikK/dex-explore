@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { formatPortfolioPct, formatAssetUsd, formatAssetPrice } from "../utils/portfolio-format";
 import { displayTokenSymbol } from "@/config/contracts";

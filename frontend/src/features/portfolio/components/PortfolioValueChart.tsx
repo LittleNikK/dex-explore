@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { formatPortfolioUsd } from "../utils/portfolio-format";
 import type { PortfolioChartPoint, PortfolioTimeframe } from "../types";
 

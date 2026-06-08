@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink } from "lucide-react";
+import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
 import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
 import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
@@ -76,11 +76,41 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const [txHash, setTxHash] = useState("");
   const [quotedOut, setQuotedOut] = useState<bigint | null>(null);
 
+  interface SwapStep {
+    id: "wrap" | "approve" | "swap" | "unwrap";
+    label: string;
+    statusText: string;
+  }
+  const [steps, setSteps] = useState<SwapStep[]>([]);
+
+  interface ToastState {
+    open: boolean;
+    type: "success" | "error";
+    title: string;
+    description: string;
+    txHash?: string;
+  }
+  const [toast, setToast] = useState<ToastState>({
+    open: false,
+    type: "success",
+    title: "",
+    description: ""
+  });
+
+  useEffect(() => {
+    if (toast.open) {
+      const timer = setTimeout(() => {
+        setToast((prev) => ({ ...prev, open: false }));
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast.open]);
+
   // Creative states
   const [arrowRotation, setArrowRotation] = useState(0);
   const [inputOrder, setInputOrder] = useState<("in" | "out")[]>(["in", "out"]);
   const [particles, setParticles] = useState<CustomParticle[]>([]);
-  const [toastOpen, setToastOpen] = useState(false);
+
 
   const isDark = theme === "dark";
 
@@ -96,7 +126,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const [isInHovered, setIsInHovered] = useState(false);
   const [isOutHovered, setIsOutHovered] = useState(false);
 
-  const [liveMstPrice, setLiveMstPrice] = useState<number>(1.85);
+  const [liveMstPrice, setLiveMstPrice] = useState<number>(0);
 
   useEffect(() => {
     let active = true;
@@ -143,6 +173,129 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       clearInterval(interval);
     };
   }, [publicClient]);
+
+  // Dynamic step determination based on input conditions & allowance
+  useEffect(() => {
+    let active = true;
+    async function determineSwapSteps() {
+      if (!isConnected || !address || !publicClient || !amountIn || Number(amountIn) <= 0 || !inputToken || !outputToken) {
+        if (active) setSteps([]);
+        return;
+      }
+
+      const amountRaw = parseUnits(amountIn, inputToken.decimals);
+      const newSteps: SwapStep[] = [];
+
+      // MST ⇄ WMST are direct wrapping/unwrapping steps
+      if (tokenIn === "MST" && tokenOut === "WMST") {
+        if (active) setSteps([{ id: "wrap", label: "Wrap MST to WMST", statusText: "Wrapping MST..." }]);
+        return;
+      }
+      if (tokenIn === "WMST" && tokenOut === "MST") {
+        if (active) setSteps([{ id: "unwrap", label: "Unwrap WMST to MST", statusText: "Unwrapping WMST..." }]);
+        return;
+      }
+
+      // Step 1: Wrap native MST if it is input
+      if (tokenIn === "MST") {
+        newSteps.push({ id: "wrap", label: "Wrap MST to WMST", statusText: "Wrapping MST..." });
+      }
+
+      // Step 2: Check token allowance (approve if needed)
+      const approveAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken.address) as Address;
+      if (approveAddress) {
+        try {
+          const allowance = await publicClient.readContract({
+            address: approveAddress,
+            abi: erc20Abi,
+            functionName: "allowance",
+            args: [address, CONTRACTS.swapRouter]
+          });
+          if (allowance < amountRaw) {
+            const tokenSymbol = tokenIn === "MST" ? "WMST" : tokenIn;
+            newSteps.push({ id: "approve", label: `Allow ${tokenSymbol}`, statusText: `Allowing ${tokenSymbol} Spending...` });
+          }
+        } catch (err) {
+          console.error("Error reading allowance:", err);
+        }
+      }
+
+      // Step 3: Swap step
+      newSteps.push({
+        id: "swap",
+        label: "Confirm Swap",
+        statusText: `Swapping ${tokenIn} for ${tokenOut}...`
+      });
+
+      // Step 4: Unwrap to native MST if it is output
+      if (tokenOut === "MST") {
+        newSteps.push({ id: "unwrap", label: "Unwrap WMST to MST", statusText: "Unwrapping WMST..." });
+      }
+
+      if (active) {
+        setSteps(newSteps);
+      }
+    }
+
+    determineSwapSteps();
+
+    return () => {
+      active = false;
+    };
+  }, [amountIn, tokenIn, tokenOut, address, isConnected, publicClient, refreshTrigger]);
+
+  const refreshSteps = async () => {
+    if (!isConnected || !address || !publicClient || !amountIn || Number(amountIn) <= 0 || !inputToken || !outputToken) {
+      setSteps([]);
+      return;
+    }
+
+    const amountRaw = parseUnits(amountIn, inputToken.decimals);
+    const newSteps: SwapStep[] = [];
+
+    if (tokenIn === "MST" && tokenOut === "WMST") {
+      setSteps([{ id: "wrap", label: "Wrap MST to WMST", statusText: "Wrapping MST..." }]);
+      return;
+    }
+    if (tokenIn === "WMST" && tokenOut === "MST") {
+      setSteps([{ id: "unwrap", label: "Unwrap WMST to MST", statusText: "Unwrapping WMST..." }]);
+      return;
+    }
+
+    if (tokenIn === "MST") {
+      newSteps.push({ id: "wrap", label: "Wrap MST to WMST", statusText: "Wrapping MST..." });
+    }
+
+    const approveAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken.address) as Address;
+    if (approveAddress) {
+      try {
+        const allowance = await publicClient.readContract({
+          address: approveAddress,
+          abi: erc20Abi,
+          functionName: "allowance",
+          args: [address, CONTRACTS.swapRouter]
+        });
+        if (allowance < amountRaw) {
+          const tokenSymbol = tokenIn === "MST" ? "WMST" : tokenIn;
+          newSteps.push({ id: "approve", label: `Allow ${tokenSymbol}`, statusText: `Allowing ${tokenSymbol} Spending...` });
+        }
+      } catch (err) {
+        console.error("Error reading allowance:", err);
+      }
+    }
+
+    newSteps.push({
+      id: "swap",
+      label: "Confirm Swap",
+      statusText: `Swapping ${tokenIn} for ${tokenOut}...`
+    });
+
+    if (tokenOut === "MST") {
+      newSteps.push({ id: "unwrap", label: "Unwrap WMST to MST", statusText: "Unwrapping WMST..." });
+    }
+
+    setSteps(newSteps);
+  };
 
   const getTokenPrice = (symbol: string) => {
     if (symbol === "USDC") return 1.0;
@@ -269,48 +422,26 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         const quoteOutAddress = (tokenOut === "MST" ? CONTRACTS.wmst : outputToken.address) as Address;
         const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
-        if (useRouterApi) {
-          // Fetch quote dynamically from the backend order router
-          const res = await fetch(`${API_BASE}/api/quote`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              tokenIn: quoteInAddress || tokenIn,
-              tokenOut: quoteOutAddress || tokenOut,
-              amountIn: amountRaw.toString()
-            })
-          });
-          if (!res.ok) throw new Error("Backend SOR quote failed");
-          const route = await res.json();
-          if (active && route && route.amountOut) {
-            const outRaw = BigInt(route.amountOut);
-            setQuotedOut(outRaw);
-            setAmountOut(Number(formatUnits(outRaw, outputToken.decimals)).toFixed(4));
-          }
-        } else {
-          // Query QuoterV2 directly via viem client simulation
-          const { result } = await publicClient.simulateContract({
-            address: CONTRACTS.quoterV2,
-            abi: quoterV2Abi,
-            functionName: "quoteExactInputSingle",
-            args: [
-              {
-                tokenIn: quoteInAddress,
-                tokenOut: quoteOutAddress,
-                amountIn: amountRaw,
-                fee: V3_FEE,
-                sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-              }
-            ]
-          });
+        // Query QuoterV2 directly via viem client simulation
+        const { result } = await publicClient.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: quoteInAddress,
+              tokenOut: quoteOutAddress,
+              amountIn: amountRaw,
+              fee: V3_FEE,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
 
-          if (active && result) {
-            const outRaw = result[0];
-            setQuotedOut(outRaw);
-            setAmountOut(Number(formatUnits(outRaw, outputToken.decimals)).toFixed(4));
-          }
+        if (active && result) {
+          const outRaw = result[0];
+          setQuotedOut(outRaw);
+          setAmountOut(formatUnits(outRaw, outputToken.decimals));
         }
       } catch (err) {
         if (active) {
@@ -327,18 +458,20 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi, refreshTrigger]);
 
   const exchangeRateString = useMemo(() => {
-    const priceIn = getTokenPrice(tokenIn);
-    const priceOut = getTokenPrice(tokenOut);
-    const rate = priceIn / priceOut;
-    return `1 ${displayTokenSymbol(tokenIn)} = ${rate.toFixed(4).replace(/\.?0+$/, "")} ${displayTokenSymbol(tokenOut)}`;
-  }, [tokenIn, tokenOut, liveMstPrice]);
+    if (!amountIn || !amountOut || Number(amountIn) <= 0 || Number(amountOut) <= 0) {
+      const priceIn = getTokenPrice(tokenIn);
+      const priceOut = getTokenPrice(tokenOut);
+      if (priceIn === 0 || priceOut === 0) return "";
+      const rate = priceIn / priceOut;
+      return `1 ${displayTokenSymbol(tokenIn)} = ${rate.toFixed(6).replace(/\.?0+$/, "")} ${displayTokenSymbol(tokenOut)}`;
+    }
+    const rate = Number(amountOut) / Number(amountIn);
+    return `1 ${displayTokenSymbol(tokenIn)} = ${rate.toFixed(6).replace(/\.?0+$/, "")} ${displayTokenSymbol(tokenOut)}`;
+  }, [tokenIn, tokenOut, amountIn, amountOut, liveMstPrice]);
 
   // Flip elements with advanced crossover transition
   const handleFlipTokens = () => {
-    setArrowRotation((prev) => prev + 180);
-    setInputOrder((prev) => [...prev].reverse());
     switchTokens();
-    setAmountIn(amountOut || "");
   };
 
   // Spark physics confetti logic
@@ -386,31 +519,6 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   }, [particles]);
 
   // Token approval helper
-  async function approveTokenIfNeeded(tokenAddress: Address, amountRaw: bigint, symbol: string) {
-    if (!publicClient || !address) return;
-
-    setStatusText(`Checking ${symbol} allowance...`);
-    const allowance = (await publicClient.readContract({
-      address: tokenAddress,
-      abi: erc20Abi,
-      functionName: "allowance",
-      args: [address, CONTRACTS.swapRouter]
-    })) as bigint;
-
-    if (allowance >= amountRaw) return;
-
-    setStatusText(`[Step 2/3] Requesting ${symbol} approval in wallet...`);
-    const approveHash = await writeContractAsync({
-      address: tokenAddress,
-      abi: erc20Abi,
-      functionName: "approve",
-      args: [CONTRACTS.swapRouter, amountRaw]
-    });
-
-    setStatusText("[Step 2/3] Confirming approval on MST Blockchain...");
-    await publicClient.waitForTransactionReceipt({ hash: approveHash });
-  }
-
   async function ensureMstChain() {
     if (chainId === mstChain.id) return true;
 
@@ -424,8 +532,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     }
   }
 
-  // Handle on-chain Swaps
+  // Handle on-chain Swaps step-by-step
   const handleSwap = async () => {
+    if (steps.length === 0) return;
+    const activeStep = steps[0];
+
     if (!isConnected) {
       navigate("/wallet");
       return;
@@ -435,25 +546,19 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       return;
     }
 
-    if (!address) {
-      setStatusText("Wallet is not loaded yet.");
-      return;
-    }
-
-    if (!isReadyAmount || !inputToken || !outputToken) {
-      setStatusText("Enter a valid amount greater than zero.");
+    if (!address || !publicClient || !inputToken) {
+      setStatusText("Wallet or token info is not loaded yet.");
       return;
     }
 
     setIsWorking(true);
     setTxHash("");
-    setStatusText("Preparing transactions...");
+    setStatusText(activeStep.statusText);
 
     try {
       const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
-      // 1. NATIVE WRAPPING (MST ⇄ WMST)
-      if (tokenIn === "MST" && tokenOut === "WMST") {
+      if (activeStep.id === "wrap") {
         setStatusText("Confirming wrap deposit in wallet...");
         const hash = await writeContractAsync({
           address: CONTRACTS.wmst,
@@ -473,154 +578,132 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
         setTxHash(hash);
         setStatusText("Confirming Wrap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash });
-
-        // Triggers success
-        setStatusText("Swap confirmed!");
-        triggerSuccessParticles();
-        setToastOpen(true);
-        setAmountIn("");
-        setAmountOut("");
-        return;
+        await publicClient.waitForTransactionReceipt({ hash });
+        setStatusText("Wrap confirmed!");
+        
+        // Direct MST -> WMST wrap completes here
+        if (tokenIn === "MST" && tokenOut === "WMST") {
+          triggerSuccessParticles();
+          setToast({
+            open: true,
+            type: "success",
+            title: "Wrap Confirmed!",
+            description: `Successfully wrapped ${amountIn} MST to WMST.`,
+            txHash: hash
+          });
+          setAmountIn("");
+          setAmountOut("");
+        } else {
+          setToast({
+            open: true,
+            type: "success",
+            title: "Wrap Successful",
+            description: `Successfully wrapped ${amountIn} MST to WMST. Ready for next step.`,
+            txHash: hash
+          });
+        }
       }
 
-      if (tokenIn === "WMST" && tokenOut === "MST") {
+      else if (activeStep.id === "approve") {
+        const approveAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken.address) as Address;
+        const tokenSymbol = tokenIn === "MST" ? "WMST" : tokenIn;
+        setStatusText(`Requesting ${tokenSymbol} approval in wallet...`);
+        const hash = await writeContractAsync({
+          address: approveAddress,
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [CONTRACTS.swapRouter, amountRaw]
+        });
+
+        setTxHash(hash);
+        setStatusText(`Confirming ${tokenSymbol} approval on MST Blockchain...`);
+        await publicClient.waitForTransactionReceipt({ hash });
+        setStatusText("Approval confirmed!");
+        setToast({
+          open: true,
+          type: "success",
+          title: "Approval Successful",
+          description: `Allowed SwapRouter to spend ${amountIn} ${tokenSymbol}. Ready for next step.`,
+          txHash: hash
+        });
+      }
+
+      else if (activeStep.id === "swap") {
+        if (hasMissingTokenAddress) {
+          setStatusText("Contract address missing in configs.");
+          setIsWorking(false);
+          return;
+        }
+
+        setStatusText("Confirm swap transaction in wallet...");
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
+        const estimatedOut = quotedOut || parseUnits(amountOut, outputToken?.decimals ?? 18);
+        const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
+
+        const swapInAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken?.address) as Address;
+        const swapOutAddress = (tokenOut === "MST" ? CONTRACTS.wmst : outputToken?.address) as Address;
+
+        console.log("exactInputSingle swap execution:", {
+          tokenIn: swapInAddress,
+          tokenOut: swapOutAddress,
+          amountIn: amountRaw.toString(),
+          amountOutMinimum: amountOutMinimum.toString(),
+          slippageBps,
+          deadline: deadline.toString()
+        });
+
+        const hash = await writeContractAsync({
+          address: CONTRACTS.swapRouter,
+          abi: swapRouterAbi,
+          functionName: "exactInputSingle",
+          args: [
+            {
+              tokenIn: swapInAddress,
+              tokenOut: swapOutAddress,
+              fee: V3_FEE,
+              recipient: address,
+              deadline,
+              amountIn: amountRaw,
+              amountOutMinimum,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ],
+          value: 0n
+        });
+
+        setTxHash(hash);
+        setStatusText("Submitting to MST Blockchain Node...");
+        await publicClient.waitForTransactionReceipt({ hash });
+        
+        // If there is no unwrapping step next, complete the swap
+        if (tokenOut !== "MST") {
+          setStatusText("Swap confirmed!");
+          triggerSuccessParticles();
+          setToast({
+            open: true,
+            type: "success",
+            title: "Swap Confirmed!",
+            description: `Successfully swapped ${amountIn} ${tokenIn} for ${amountOut} ${tokenOut}.`,
+            txHash: hash
+          });
+          setAmountIn("");
+          setAmountOut("");
+        } else {
+          setStatusText("Swap successful! Unwrap required.");
+          setToast({
+            open: true,
+            type: "success",
+            title: "Swap Successful",
+            description: `Swapped to WMST. Ready to unwrap back to native MST.`,
+            txHash: hash
+          });
+        }
+      }
+
+      else if (activeStep.id === "unwrap") {
         setStatusText("Confirming unwrap withdrawal in wallet...");
-        const hash = await writeContractAsync({
-          address: CONTRACTS.wmst,
-          abi: [
-            {
-              type: "function",
-              name: "withdraw",
-              stateMutability: "nonpayable",
-              inputs: [{ name: "wad", type: "uint256" }],
-              outputs: []
-            }
-          ] as const,
-          functionName: "withdraw",
-          args: [amountRaw]
-        });
-
-        setTxHash(hash);
-        setStatusText("Confirming Unwrap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash });
-
-        setStatusText("Swap confirmed!");
-        triggerSuccessParticles();
-        setToastOpen(true);
-        setAmountIn("");
-        setAmountOut("");
-        return;
-      }
-
-      // 2. MULTI-STEP ROUTING (MST Native ⇄ USDC)
-      if (tokenIn === "MST" && tokenOut === "USDC") {
-        setStatusText("[Step 1/3] Wrapping native MST to WMST...");
-        const wrapHash = await writeContractAsync({
-          address: CONTRACTS.wmst,
-          abi: [
-            {
-              type: "function",
-              name: "deposit",
-              stateMutability: "payable",
-              inputs: [],
-              outputs: []
-            }
-          ] as const,
-          functionName: "deposit",
-          args: [],
-          value: amountRaw
-        });
-        setStatusText("[Step 1/3] Confirming Wrap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash: wrapHash });
-
-        await approveTokenIfNeeded(CONTRACTS.wmst, amountRaw, "WMST");
-
-        setStatusText("[Step 3/3] Swapping WMST for USDC...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
-        const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
-        const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
-
-        console.log("exactInputSingle (MST -> USDC):", {
-          tokenIn: CONTRACTS.wmst,
-          tokenOut: outputToken.address,
-          amountIn: amountRaw.toString(),
-          amountOutMinimum: amountOutMinimum.toString(),
-          slippageBps,
-          deadline: deadline.toString()
-        });
-
-        const hash = await writeContractAsync({
-          address: CONTRACTS.swapRouter,
-          abi: swapRouterAbi,
-          functionName: "exactInputSingle",
-          args: [
-            {
-              tokenIn: CONTRACTS.wmst,
-              tokenOut: outputToken.address as Address,
-              fee: V3_FEE,
-              recipient: address,
-              deadline,
-              amountIn: amountRaw,
-              amountOutMinimum,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ],
-          value: 0n
-        });
-
-        setTxHash(hash);
-        setStatusText("[Step 3/3] Confirming swap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash });
-
-        setStatusText("Swap confirmed!");
-        triggerSuccessParticles();
-        setToastOpen(true);
-        setAmountIn("");
-        setAmountOut("");
-        return;
-      }
-
-      if (tokenIn === "USDC" && tokenOut === "MST") {
-        await approveTokenIfNeeded(inputToken.address as Address, amountRaw, "USDC");
-
-        setStatusText("[Step 2/3] Swapping USDC for WMST in wallet...");
-        const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, 18);
-        const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
-
-        console.log("exactInputSingle (USDC -> MST):", {
-          tokenIn: inputToken.address,
-          tokenOut: CONTRACTS.wmst,
-          amountIn: amountRaw.toString(),
-          amountOutMinimum: amountOutMinimum.toString(),
-          slippageBps,
-          deadline: deadline.toString()
-        });
-
-        const swapHash = await writeContractAsync({
-          address: CONTRACTS.swapRouter,
-          abi: swapRouterAbi,
-          functionName: "exactInputSingle",
-          args: [
-            {
-              tokenIn: inputToken.address as Address,
-              tokenOut: CONTRACTS.wmst,
-              fee: V3_FEE,
-              recipient: address,
-              deadline,
-              amountIn: amountRaw,
-              amountOutMinimum,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ],
-          value: 0n
-        });
-        setStatusText("[Step 2/3] Confirming swap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash: swapHash });
-
-        setStatusText("[Step 3/3] Unwrapping WMST to native MST...");
-        const unwrapHash = await writeContractAsync({
+        const hash = await writeContractAsync({
           address: CONTRACTS.wmst,
           abi: [
             {
@@ -635,77 +718,39 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           args: [estimatedOut]
         });
 
-        setTxHash(unwrapHash);
-        setStatusText("[Step 3/3] Confirming Unwrap on MST Blockchain...");
-        await publicClient?.waitForTransactionReceipt({ hash: unwrapHash });
-
+        setTxHash(hash);
+        setStatusText("Confirming Unwrap on MST Blockchain...");
+        await publicClient.waitForTransactionReceipt({ hash });
+        
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
-        setToastOpen(true);
+        setToast({
+          open: true,
+          type: "success",
+          title: "Swap Confirmed!",
+          description: `Successfully unwrapped WMST to ${amountOut} MST.`,
+          txHash: hash
+        });
         setAmountIn("");
         setAmountOut("");
-        return;
       }
 
-      // 3. ERC20 TO ERC20 ROUTING (WMST ⇄ USDC)
-      if (hasMissingTokenAddress) {
-        setStatusText("Contract address missing in configs.");
-        setIsWorking(false);
-        return;
-      }
-
-      await approveTokenIfNeeded(inputToken.address as Address, amountRaw, inputToken.symbol);
-
-      setStatusText("Confirm swap transaction in wallet...");
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
-      const estimatedOut = quotedOut || parseUnits(amountOut, outputToken.decimals);
-      const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
-
-      console.log("exactInputSingle (ERC20 -> ERC20):", {
-        tokenIn: inputToken.address,
-        tokenOut: outputToken.address,
-        amountIn: amountRaw.toString(),
-        amountOutMinimum: amountOutMinimum.toString(),
-        slippageBps,
-        deadline: deadline.toString()
-      });
-
-      const hash = await writeContractAsync({
-        address: CONTRACTS.swapRouter,
-        abi: swapRouterAbi,
-        functionName: "exactInputSingle",
-        args: [
-          {
-            tokenIn: inputToken.address as Address,
-            tokenOut: outputToken.address as Address,
-            fee: V3_FEE,
-            recipient: address,
-            deadline,
-            amountIn: amountRaw,
-            amountOutMinimum,
-            sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-          }
-        ],
-        value: 0n
-      });
-
-      setTxHash(hash);
-      setStatusText("Submitting to MST Blockchain Node...");
-      await publicClient?.waitForTransactionReceipt({ hash });
-
-      setStatusText("Swap confirmed!");
-      triggerSuccessParticles();
-      setToastOpen(true);
-      setAmountIn("");
-      setAmountOut("");
+      // Recheck steps to move to the next step
+      await refreshSteps();
     } catch (err) {
       console.error(err);
       const message = err instanceof Error ? err.message : "Swap failed.";
-      setStatusText(
-        message.includes("reverted")
-          ? "Swap reverted. Check liquidity pools."
-          : message.substring(0, 80)
-      );
+      const shortMsg = message.includes("reverted")
+        ? "Swap reverted. Check liquidity pools."
+        : message.substring(0, 80);
+      
+      setStatusText(shortMsg);
+      setToast({
+        open: true,
+        type: "error",
+        title: "Transaction Failed",
+        description: shortMsg
+      });
     } finally {
       setIsWorking(false);
     }
@@ -716,8 +761,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     if (chainId !== mstChain.id) return isSwitching ? "Switching Network..." : "Switch to MST Testnet";
     if (isWorking) return statusText || "Processing...";
     if (!amountIn || Number(amountIn) <= 0) return "Enter an amount";
+    if (steps.length > 0) {
+      return steps[0].label;
+    }
     return "Confirm Swap";
-  }, [isConnected, chainId, isWorking, statusText, amountIn, isSwitching]);
+  }, [isConnected, chainId, isWorking, statusText, amountIn, isSwitching, steps]);
 
   // Glow border tracking
   const handleInMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -927,15 +975,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                   </div>
 
                   <div className="flex items-center justify-between gap-3">
-                    {/* Ticker value or placeholder */}
-                    {amountOut ? (
-                      <NumberTicker
-                        value={amountOut}
-                        className="font-bold text-3xl max-w-[200px] truncate select-none leading-none font-display text-zinc-950 dark:text-white"
-                      />
-                    ) : (
-                      <span className="font-display font-bold text-3xl text-zinc-600">0.0</span>
-                    )}
+                    <input
+                      type="text"
+                      readOnly
+                      placeholder="0.0"
+                      value={amountOut}
+                      className="w-full bg-transparent border-none outline-none font-display font-bold text-3xl placeholder-zinc-600 max-w-[200px] truncate"
+                    />
 
                     {/* Magnetic token selector pill */}
                     <button
@@ -1018,7 +1064,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         <button
           ref={buttonMagneticRef}
           onClick={handleSwap}
-          disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0))}
+          disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0 || steps.length === 0))}
           className={`w-full mt-5 py-4.5 font-display font-bold text-lg tracking-wider transition-all duration-300 relative overflow-hidden group border-none shadow-none bg-transparent select-none outline-none
             ${!isConnected
               ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 active:scale-[0.98]"
@@ -1050,54 +1096,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           )}
         </button>
 
-        {/* Detailed real-time execution logger */}
-        <AnimatePresence>
-          {statusText && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden mt-4"
-            >
-              <div
-                className={`p-3.5 rounded-2xl border text-sm font-semibold leading-relaxed font-mono
-                  ${statusText === "Swap confirmed!"
-                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
-                    : "bg-[#141526]/50 border-zinc-800/60 text-zinc-400"
-                  }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {statusText === "Swap confirmed!" ? <CheckCircle2 size={14} className="text-emerald-400" /> : <div className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />}
-                    <span>Status: {statusText}</span>
-                  </div>
-                  {statusText === "Swap confirmed!" && (
-                    <button
-                      onClick={() => setStatusText("")}
-                      className="underline text-xs font-bold text-cyan-400 hover:text-cyan-300"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-                {txHash && (
-                  <div className="mt-2 pt-2 border-t border-zinc-800/40 font-mono text-xs break-all opacity-80 flex items-center justify-between gap-2">
-                    <span className="truncate">TX: {txHash}</span>
-                    <a
-                      href={`https://testnet.mstscan.com/tx/${txHash}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline text-cyan-400 hover:text-cyan-300 shrink-0 inline-flex items-center gap-0.5"
-                    >
-                      <span>Scan</span>
-                      <ExternalLink size={10} />
-                    </a>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
       </motion.div>
 
       {/* Select Token Modal */}
@@ -1121,48 +1120,55 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         theme={theme}
       />
 
-      {/* Cyber Neon success toast */}
+      {/* Premium custom top-right Toast notification (Tostify style) */}
       <AnimatePresence>
-        {toastOpen && (
+        {toast.open && (
           <motion.div
-            initial={{ opacity: 0, y: 50, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            transition={{ type: "spring", damping: 20 }}
-            className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl shadow-2xl border bg-[#0c0c16]/95 border-emerald-500/35 text-white max-w-[340px]"
-            style={{
-              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(16, 185, 129, 0.15)"
-            }}
+            initial={{ opacity: 0, y: -20, x: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, x: 20, scale: 0.95 }}
+            transition={{ type: "spring", damping: 22, stiffness: 200 }}
+            className={`fixed top-24 right-6 z-[999] p-4 rounded-2xl shadow-2xl border w-full max-w-[360px] text-white backdrop-blur-md
+              ${toast.type === "success" 
+                ? "bg-[#0c0c16]/95 border-emerald-500/30 shadow-[0_10px_30px_rgba(0,0,0,0.8),0_0_20px_rgba(16,185,129,0.1)]" 
+                : "bg-[#180a0a]/95 border-rose-500/30 shadow-[0_10px_30px_rgba(0,0,0,0.8),0_0_20px_rgba(244,63,94,0.1)]"
+              }`}
           >
-            <div className="flex gap-3">
-              <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400 self-start">
-                <CheckCircle2 size={20} />
+            <div className="flex gap-3 relative">
+              <div className={`p-2 rounded-xl self-start
+                ${toast.type === "success" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"}`}
+              >
+                {toast.type === "success" ? <CheckCircle2 size={20} /> : <XCircle size={20} />}
               </div>
-              <div className="flex-1">
-                <h4 className="font-display font-bold text-sm tracking-wide">Transaction Confirmed!</h4>
-                <p className="text-xs font-mono text-zinc-400 mt-1 leading-relaxed">
-                  Successfully swapped native/ERC20 assets on MST concentrated pools.
+              
+              <div className="flex-1 pr-4">
+                <h4 className="font-display font-bold text-sm tracking-wide">
+                  {toast.title}
+                </h4>
+                <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                  {toast.description}
                 </p>
-                {txHash && (
+                {toast.txHash && (
                   <div className="mt-2.5 pt-2 border-t border-zinc-800/60 flex items-center justify-between">
                     <a
-                      href={`https://testnet.mstscan.com/tx/${txHash}`}
+                      href={`https://testnet.mstscan.com/tx/${toast.txHash}`}
                       target="_blank"
                       rel="noreferrer"
                       className="text-[10px] font-mono text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-1"
                     >
-                      <span>View on Block Explorer</span>
+                      <span>View on Explorer</span>
                       <ExternalLink size={10} />
                     </a>
-                    <button
-                      onClick={() => setToastOpen(false)}
-                      className="text-[10px] font-bold text-zinc-500 hover:text-white uppercase font-mono tracking-wider"
-                    >
-                      Dismiss
-                    </button>
                   </div>
                 )}
               </div>
+
+              <button
+                onClick={() => setToast((prev) => ({ ...prev, open: false }))}
+                className="absolute top-0 right-0 p-1 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+              >
+                <X size={14} />
+              </button>
             </div>
           </motion.div>
         )}

@@ -1,6 +1,15 @@
 import { formatUnits, parseUnits, type Address } from "viem";
 import { publicClient } from "../config/client.js";
-import addresses from "../config/addresses.json" with { type: "json" };
+import { readFileSync, existsSync } from "fs";
+import { join } from "path";
+
+const getAddresses = () => {
+  const srcPath = join(process.cwd(), "src/config/addresses.json");
+  const distPath = join(process.cwd(), "dist/config/addresses.json");
+  const path = existsSync(srcPath) ? srcPath : distPath;
+  return JSON.parse(readFileSync(path, "utf8"));
+};
+const addresses = getAddresses();
 
 const FEE = 0.997; // 0.3% fee approximation per hop
 
