@@ -7,6 +7,7 @@ import { wagmiConfig } from "./config/wagmi";
 import { BackgroundCanvas } from "./components/swap/BackgroundCanvas";
 
 // Import custom pages
+import LandingPage from "./pages/LandingPage";
 import SwapPage from "./pages/SwapPage";
 import ExplorePage from "./pages/ExplorePage";
 import LiquidityPage from "./pages/LiquidityPage";
@@ -420,41 +421,51 @@ function Navigation() {
 
 function MainLayout() {
   const { theme } = useThemeStore();
+  const location = useLocation();
   const isDark = theme === "dark";
+  const isLandingPage = location.pathname === "/";
 
   // Sync dark class with document element for Tailwind and custom CSS variables
   useEffect(() => {
     const root = window.document.documentElement;
-    if (isDark) {
+    if (isLandingPage) {
+      root.classList.remove("dark");
+    } else if (isDark) {
       root.classList.add("dark");
     } else {
       root.classList.remove("dark");
     }
-  }, [isDark]);
+  }, [isDark, isLandingPage]);
 
   return (
     <div
       className={`relative min-h-screen transition-colors duration-300 ease-in-out select-none overflow-hidden
-        ${isDark ? "text-white" : "text-zinc-950"}`}
+        ${isLandingPage ? "text-zinc-950 bg-white" : isDark ? "text-white" : "text-zinc-950"}`}
       style={{
-        background: isDark
-          ? "radial-gradient(120% 120% at 50% 0%, #0A1128 0%, #05070F 100%)"
-          : "radial-gradient(120% 120% at 50% 0%, #EBF3FF 0%, #F1F5F9 100%)"
+        background: isLandingPage
+          ? "#ffffff"
+          : isDark
+            ? "radial-gradient(120% 120% at 50% 0%, #0A1128 0%, #05070F 100%)"
+            : "radial-gradient(120% 120% at 50% 0%, #EBF3FF 0%, #F1F5F9 100%)"
       }}
     >
       {/* Dynamic Blue Glowing background spots */}
-      <div className="absolute top-[10%] left-[5%] w-[350px] h-[350px] bg-blue-500/10 rounded-full blur-[120px] pointer-events-none z-0" />
-      <div className="absolute top-[40%] right-[10%] w-[450px] h-[450px] bg-indigo-500/5 rounded-full blur-[140px] pointer-events-none z-0" />
-      <div className="absolute bottom-[10%] left-[15%] w-[400px] h-[400px] bg-cyan-500/10 rounded-full blur-[130px] pointer-events-none z-0" />
+      {!isLandingPage && (
+        <>
+          <div className="absolute top-[10%] left-[5%] w-[350px] h-[350px] bg-blue-500/10 rounded-full blur-[120px] pointer-events-none z-0" />
+          <div className="absolute top-[40%] right-[10%] w-[450px] h-[450px] bg-indigo-500/5 rounded-full blur-[140px] pointer-events-none z-0" />
+          <div className="absolute bottom-[10%] left-[15%] w-[400px] h-[400px] bg-cyan-500/10 rounded-full blur-[130px] pointer-events-none z-0" />
+        </>
+      )}
 
       {/* Global persistent 3D WebGL Canvas Background */}
-      <BackgroundCanvas />
+      {!isLandingPage && <BackgroundCanvas />}
 
       {/* Global Toast Alerts */}
       <ToastContainer />
 
       {/* Navigation Navbar */}
-      <Navigation />
+      {!isLandingPage && <Navigation />}
 
       {/* Page Routing */}
       <div className="relative z-10">
@@ -464,7 +475,7 @@ function MainLayout() {
           </div>
         }>
           <Routes>
-            <Route path="/" element={<SwapPage />} />
+            <Route path="/" element={<LandingPage />} />
             <Route path="/swap" element={<SwapPage />} />
             <Route path="/explore" element={<ExplorePage />} />
             <Route path="/liquidity" element={<LiquidityPage />} />
