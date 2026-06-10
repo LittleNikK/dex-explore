@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck, Loader2, CheckCircle2, XCircle } from "lucide-react";
-import { formatUnits, parseUnits, type Address } from "viem";
+import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
 import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig } from "../config/contracts";
 import { mstChain } from "../config/chains";
@@ -10,6 +10,8 @@ import { TokenLogo } from "../components/swap/TokenLogos";
 import { MstTokenModal } from "../components/swap/MstTokenModal";
 import { useThemeStore } from "../store/themeStore";
 import { getAmountsForLiquidity, getOtherAmountForToken } from "../utils/uniswap-math";
+import { poolService } from "../services/pool.service";
+import { liquidityService } from "../services/liquidity.service";
 
 const poolAbi = [
   {
@@ -373,13 +375,13 @@ export default function LiquidityPage() {
     }
 
     fetchMstPrice(client);
-    const interval = setInterval(() => fetchMstPrice(client), 15000);
+    const interval = setInterval(() => fetchMstPrice(client), 30000);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [publicClient]);
+  }, [chainId]);
 
   // Helper: Fetch user ERC20 token balances
   const fetchERC20Balances = async () => {
@@ -425,100 +427,107 @@ export default function LiquidityPage() {
         return;
       }
 
-      const tempPositions: PositionItem[] = [];
-
-      for (let i = 0n; i < npmBalance; i++) {
-        try {
-          const tokenId = await publicClient.readContract({
+      // 1. Fetch all token IDs in parallel
+      const tokenIds = await Promise.all(
+        Array.from({ length: Number(npmBalance) }, (_, i) =>
+          publicClient.readContract({
             address: CONTRACTS.positionManager,
             abi: nonfungiblePositionManagerAbi,
             functionName: "tokenOfOwnerByIndex",
-            args: [address, i]
-          }) as bigint;
+            args: [address, BigInt(i)]
+          }) as Promise<bigint>
+        )
+      );
 
-          const positionInfo = await publicClient.readContract({
-            address: CONTRACTS.positionManager,
-            abi: nonfungiblePositionManagerAbi,
-            functionName: "positions",
-            args: [tokenId]
-          }) as any;
+      // 2. Fetch details for all token IDs in parallel
+      const tempPositions = await Promise.all(
+        tokenIds.map(async (tokenId) => {
+          try {
+            const positionInfo = await publicClient.readContract({
+              address: CONTRACTS.positionManager,
+              abi: nonfungiblePositionManagerAbi,
+              functionName: "positions",
+              args: [tokenId]
+            }) as any;
 
-          const token0 = positionInfo[2] as Address;
-          const token1 = positionInfo[3] as Address;
-          const fee = positionInfo[4] as number;
-          const tickLower = positionInfo[5] as number;
-          const tickUpper = positionInfo[6] as number;
-          const liquidity = positionInfo[7] as bigint;
-          const owed0 = positionInfo[10] as bigint;
-          const owed1 = positionInfo[11] as bigint;
+            const token0 = positionInfo[2] as Address;
+            const token1 = positionInfo[3] as Address;
+            const fee = positionInfo[4] as number;
+            const tickLower = positionInfo[5] as number;
+            const tickUpper = positionInfo[6] as number;
+            const liquidity = positionInfo[7] as bigint;
+            const owed0 = positionInfo[10] as bigint;
+            const owed1 = positionInfo[11] as bigint;
 
-          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
-          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
+            const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
+            const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
 
-          const poolAddr = await publicClient.readContract({
-            address: CONTRACTS.factory,
-            abi: uniswapV3FactoryAbi,
-            functionName: "getPool",
-            args: [token0, token1, fee]
-          }) as string;
+            const poolAddr = await publicClient.readContract({
+              address: CONTRACTS.factory,
+              abi: uniswapV3FactoryAbi,
+              functionName: "getPool",
+              args: [token0, token1, fee]
+            }) as string;
 
-          let isInRange = false;
-          let poolSqrtPriceX96 = 0n;
-          let amount0 = 0n;
-          let amount1 = 0n;
+            let isInRange = false;
+            let poolSqrtPriceX96 = 0n;
+            let amount0 = 0n;
+            let amount1 = 0n;
 
-          if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
-            try {
-              const slot0 = await publicClient.readContract({
-                address: poolAddr as Address,
-                abi: poolAbi,
-                functionName: "slot0"
-              }) as any;
-              const sqrtPriceX96 = slot0[0] as bigint;
-              const activeTick = slot0[1] as number;
+            if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+              try {
+                const slot0 = await publicClient.readContract({
+                  address: poolAddr as Address,
+                  abi: poolAbi,
+                  functionName: "slot0"
+                }) as any;
+                const sqrtPriceX96 = slot0[0] as bigint;
+                const activeTick = slot0[1] as number;
 
-              poolSqrtPriceX96 = sqrtPriceX96;
-              isInRange = activeTick >= tickLower && activeTick <= tickUpper;
+                poolSqrtPriceX96 = sqrtPriceX96;
+                isInRange = activeTick >= tickLower && activeTick <= tickUpper;
 
-              if (liquidity > 0n) {
-                const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
-                  liquidity,
-                  sqrtPriceX96,
-                  tickLower,
-                  tickUpper
-                );
-                amount0 = calcAmt0;
-                amount1 = calcAmt1;
+                if (liquidity > 0n) {
+                  const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+                    liquidity,
+                    sqrtPriceX96,
+                    tickLower,
+                    tickUpper
+                  );
+                  amount0 = calcAmt0;
+                  amount1 = calcAmt1;
+                }
+              } catch (mathErr) {
+                console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
               }
-            } catch (mathErr) {
-              console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
             }
+
+            return {
+              tokenId,
+              liquidity,
+              token0,
+              token1,
+              fee,
+              tickLower,
+              tickUpper,
+              tokensOwed0: owed0,
+              tokensOwed1: owed1,
+              poolAddress: poolAddr,
+              amount0,
+              amount1,
+              isInRange,
+              token0Info: t0Info as TokenConfig,
+              token1Info: t1Info as TokenConfig,
+              poolSqrtPriceX96
+            };
+          } catch (err) {
+            console.error(`Error querying details for tokenId ${tokenId}`, err);
+            return null;
           }
+        })
+      );
 
-          tempPositions.push({
-            tokenId,
-            liquidity,
-            token0,
-            token1,
-            fee,
-            tickLower,
-            tickUpper,
-            tokensOwed0: owed0,
-            tokensOwed1: owed1,
-            poolAddress: poolAddr,
-            amount0,
-            amount1,
-            isInRange,
-            token0Info: t0Info as TokenConfig,
-            token1Info: t1Info as TokenConfig,
-            poolSqrtPriceX96
-          });
-        } catch (err) {
-          console.error(`Error querying details for tokenId index ${i}`, err);
-        }
-      }
-
-      setPositions(tempPositions);
+      setPositions(tempPositions.filter((p): p is PositionItem => p !== null));
     } catch (e) {
       console.error("Error fetching LP states in LiquidityPage", e);
     }
@@ -527,22 +536,26 @@ export default function LiquidityPage() {
   // Fetch all live values on load and periodically
   useEffect(() => {
     fetchERC20Balances();
-    fetchLPState();
+    if (currentView === "list") {
+      fetchLPState();
+    }
 
     const interval = setInterval(() => {
       fetchERC20Balances();
-      fetchLPState();
-    }, 8000);
+      if (currentView === "list") {
+        fetchLPState();
+      }
+    }, 30000);
 
     return () => clearInterval(interval);
-  }, [address, isConnected, publicClient]);
+  }, [address, isConnected, chainId, currentView]);
 
   // Sync pool existence status
   useEffect(() => {
     if (currentView === "create") {
       checkPoolStatus(initFee);
     }
-  }, [initFee, currentView, publicClient]);
+  }, [initFee, currentView, chainId]);
 
   // Helper: Request token spending approvals
   async function approveTokenIfNeeded(tokenAddress: Address, amountRaw: bigint, symbol: string) {
@@ -785,7 +798,38 @@ export default function LiquidityPage() {
 
         setTxHash(mintHash);
         setStatusText("Waiting for position mint confirmation...");
-        await publicClient?.waitForTransactionReceipt({ hash: mintHash });
+        const receipt = await publicClient?.waitForTransactionReceipt({ hash: mintHash });
+
+        // Register pool in backend database
+        try {
+          const poolAddress = await publicClient?.readContract({
+            address: CONTRACTS.factory,
+            abi: uniswapV3FactoryAbi,
+            functionName: "getPool",
+            args: [t0, t1, initFee]
+          }) as string;
+
+          const t0Symbol = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? tokenA_Symbol : tokenB_Symbol;
+          const t1Symbol = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? tokenA_Symbol : tokenB_Symbol;
+
+          await poolService.createPool({
+            poolAddress: poolAddress.toLowerCase(),
+            token0Address: t0.toLowerCase(),
+            token1Address: t1.toLowerCase(),
+            token0Symbol: t0Symbol,
+            token1Symbol: t1Symbol,
+            creatorWallet: address!.toLowerCase(),
+            txHash: mintHash,
+            chainId: chainId!,
+            feeTier: initFee,
+            token0Decimals: dec0,
+            token1Decimals: dec1,
+            token0InitialAmount: amount0.toString(),
+            token1InitialAmount: amount1.toString(),
+          });
+        } catch (backendErr) {
+          console.error("Failed to register pool in backend:", backendErr);
+        }
 
         // Mark as completed
         setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "completed" } : s));
@@ -873,7 +917,57 @@ export default function LiquidityPage() {
 
       setTxHash(hash);
       setStatusText("Waiting for block confirmation on MST Blockchain...");
-      await publicClient?.waitForTransactionReceipt({ hash });
+      const receipt = await publicClient?.waitForTransactionReceipt({ hash });
+
+      // Log add liquidity to backend database
+      try {
+        const LP_EVENTS_ABI = [
+          {
+            type: "event",
+            name: "IncreaseLiquidity",
+            inputs: [
+              { indexed: true, name: "tokenId", type: "uint256" },
+              { indexed: false, name: "liquidity", type: "uint128" },
+              { indexed: false, name: "amount0", type: "uint256" },
+              { indexed: false, name: "amount1", type: "uint256" }
+            ]
+          }
+        ] as const;
+
+        let rawAmt0 = amount0Desired.toString();
+        let rawAmt1 = amount1Desired.toString();
+
+        if (receipt && receipt.logs) {
+          for (const log of receipt.logs) {
+            try {
+              const decoded = decodeEventLog({
+                abi: LP_EVENTS_ABI,
+                data: log.data,
+                topics: log.topics
+              });
+              if (decoded.eventName === "IncreaseLiquidity") {
+                rawAmt0 = decoded.args.amount0.toString();
+                rawAmt1 = decoded.args.amount1.toString();
+                break;
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+
+        await liquidityService.recordAddLiquidity({
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address!.toLowerCase(),
+          token0Amount: rawAmt0,
+          token1Amount: rawAmt1,
+          txHash: hash,
+          chainId: chainId!,
+        });
+      } catch (backendErr) {
+        console.error("Failed to log liquidity addition to backend:", backendErr);
+      }
+
       setStatusText("Concentrated liquidity successfully added!");
       setAddAmount0("");
       setAddAmount1("");
@@ -924,7 +1018,56 @@ export default function LiquidityPage() {
 
       setTxHash(decreaseHash);
       setStatusText("Waiting for decrease liquidity transaction receipt...");
-      await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
+      const receipt = await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
+
+      // Log remove liquidity to backend database
+      try {
+        const LP_EVENTS_ABI = [
+          {
+            type: "event",
+            name: "DecreaseLiquidity",
+            inputs: [
+              { indexed: true, name: "tokenId", type: "uint256" },
+              { indexed: false, name: "liquidity", type: "uint128" },
+              { indexed: false, name: "amount0", type: "uint256" },
+              { indexed: false, name: "amount1", type: "uint256" }
+            ]
+          }
+        ] as const;
+
+        let rawAmt0 = "0";
+        let rawAmt1 = "0";
+
+        if (receipt && receipt.logs) {
+          for (const log of receipt.logs) {
+            try {
+              const decoded = decodeEventLog({
+                abi: LP_EVENTS_ABI,
+                data: log.data,
+                topics: log.topics
+              });
+              if (decoded.eventName === "DecreaseLiquidity") {
+                rawAmt0 = decoded.args.amount0.toString();
+                rawAmt1 = decoded.args.amount1.toString();
+                break;
+              }
+            } catch (e) {
+              // Ignore
+            }
+          }
+        }
+
+        await liquidityService.recordRemoveLiquidity({
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address!.toLowerCase(),
+          token0Amount: rawAmt0,
+          token1Amount: rawAmt1,
+          txHash: decreaseHash,
+          chainId: chainId!,
+        });
+      } catch (backendErr) {
+        console.error("Failed to log liquidity removal to backend:", backendErr);
+      }
 
       // Now collect the tokens from decrease liquidity
       setStatusText("Collecting tokens from position...");

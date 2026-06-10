@@ -13,7 +13,7 @@ export function usePortfolio(walletAddress?: string, enabled = true) {
     queryKey: ["portfolio", walletAddress ?? "default", refreshToken],
     enabled,
     queryFn: () => getPortfolio({ walletAddress }),
-    staleTime: 30_000,
+    staleTime: 30000,
     gcTime: 5 * 60 * 1000,
   });
 

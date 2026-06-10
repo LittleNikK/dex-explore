@@ -105,7 +105,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       active = false;
       clearInterval(interval);
     };
-  }, [publicClient]);
+  }, [chainId]);
 
   const getTokenPrice = (symbol: string) => {
     if (symbol === "USDC") return 1.0;
@@ -185,7 +185,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenIn, inputToken, publicClient, nativeBalanceData]);
+  }, [address, isConnected, tokenIn, inputToken, chainId, nativeBalanceData]);
 
   // 2. Query Concentrated Quotes in real time
   useEffect(() => {
@@ -267,7 +267,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, chainId, liveMstPrice, useRouterApi]);
 
   const exchangeRateString = useMemo(() => {
     if (!amountIn || !amountOut || Number(amountIn) <= 0 || Number(amountOut) <= 0) {

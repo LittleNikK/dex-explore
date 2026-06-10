@@ -146,20 +146,20 @@ export async function getWalletPortfolioSnapshot({
     console.error("Error fetching NPM balance in portfolio service", err);
   }
 
-  const tokenIds: bigint[] = [];
-  for (let i = 0n; i < npmBalance; i++) {
-    try {
-      const tokenId = await publicClient.readContract({
+  // 1. Fetch all token IDs in parallel
+  const tokenIds = await Promise.all(
+    Array.from({ length: Number(npmBalance) }, (_, i) =>
+      publicClient.readContract({
         address: CONTRACTS.positionManager,
         abi: nonfungiblePositionManagerAbi,
         functionName: "tokenOfOwnerByIndex",
-        args: [address, i]
-      }) as bigint;
-      tokenIds.push(tokenId);
-    } catch (err) {
-      console.error(`Error fetching tokenOfOwnerByIndex at index ${i}`, err);
-    }
-  }
+        args: [address, BigInt(i)]
+      }) as Promise<bigint>
+    )
+  ).catch((err) => {
+    console.error("Error fetching tokenIds in parallel in wallet snapshot", err);
+    return [] as bigint[];
+  });
 
   const activePositionsRaw = await Promise.all(
     tokenIds.map(async (tokenId) => {
@@ -224,120 +224,125 @@ export async function getWalletPortfolioSnapshot({
     });
   });
 
-  const positions: PortfolioPosition[] = [];
-  let lpValueUsd = 0;
+  // 2. Fetch all position details and reserves concurrently in parallel
+  const positionsAndLp = await Promise.all(
+    activePositionsRaw.map(async ({ tokenId, positionInfo }) => {
+      const token0Address = positionInfo[2] as Address;
+      const token1Address = positionInfo[3] as Address;
+      const fee = positionInfo[4] as number;
+      const tickLower = positionInfo[5] as number;
+      const tickUpper = positionInfo[6] as number;
+      const lpLiquidity = positionInfo[7] as bigint;
+      const tokensOwed0 = positionInfo[10] as bigint;
+      const tokensOwed1 = positionInfo[11] as bigint;
 
-  for (const { tokenId, positionInfo } of activePositionsRaw) {
-    const token0Address = positionInfo[2] as Address;
-    const token1Address = positionInfo[3] as Address;
-    const fee = positionInfo[4] as number;
-    const tickLower = positionInfo[5] as number;
-    const tickUpper = positionInfo[6] as number;
-    const lpLiquidity = positionInfo[7] as bigint;
-    const tokensOwed0 = positionInfo[10] as bigint;
-    const tokensOwed1 = positionInfo[11] as bigint;
-
-    // Resolve poolAddress via factory
-    let poolAddress = "0x0000000000000000000000000000000000000000";
-    try {
-      poolAddress = await publicClient.readContract({
-        address: CONTRACTS.factory,
-        abi: uniswapV3FactoryAbi,
-        functionName: "getPool",
-        args: [token0Address, token1Address, fee]
-      }) as string;
-    } catch (err) {
-      console.error("Error fetching pool address from factory in portfolio service", err);
-    }
-
-    const wmstToken = TOKENS.find((token) => token.symbol === "WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst };
-    const usdcToken = TOKENS.find((token) => token.symbol === "USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc };
-
-    const match0 = TOKENS.find((token) => token.address?.toLowerCase() === token0Address.toLowerCase());
-    const token0Info = match0 || (token0Address.toLowerCase() === CONTRACTS.usdc?.toLowerCase() ? usdcToken : { symbol: "USDC", decimals: 18, address: token0Address });
-
-    const match1 = TOKENS.find((token) => token.address?.toLowerCase() === token1Address.toLowerCase());
-    const token1Info = match1 || (token1Address.toLowerCase() === CONTRACTS.wmst?.toLowerCase() ? wmstToken : { symbol: "WMST", decimals: 18, address: token1Address });
-
-    const price0 = token0Info.symbol === "USDC" ? 1.0 : (token0Info.symbol === "WMST" || token0Info.symbol === "MST" || token0Info.symbol === "tMST" ? liveMstPrice : (token0Info as any).priceUsd ?? 0);
-    const price1 = token1Info.symbol === "USDC" ? 1.0 : (token1Info.symbol === "WMST" || token1Info.symbol === "MST" || token1Info.symbol === "tMST" ? liveMstPrice : (token1Info as any).priceUsd ?? 0);
-
-    let finalAmt0 = 0n;
-    let finalAmt1 = 0n;
-
-    if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
+      // Resolve poolAddress via factory
+      let poolAddress = "0x0000000000000000000000000000000000000000";
       try {
-        const slot0 = await publicClient.readContract({
-          address: poolAddress as Address,
-          abi: poolAbi,
-          functionName: "slot0"
-        });
-        const sqrtPriceX96 = slot0[0];
-        const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
-          lpLiquidity,
-          sqrtPriceX96,
-          tickLower,
-          tickUpper
-        );
-        finalAmt0 = calcAmt0;
-        finalAmt1 = calcAmt1;
-      } catch (mathErr) {
-        console.error(`Failed calculating V3 reserves for tokenId ${tokenId}`, mathErr);
+        poolAddress = await publicClient.readContract({
+          address: CONTRACTS.factory,
+          abi: uniswapV3FactoryAbi,
+          functionName: "getPool",
+          args: [token0Address, token1Address, fee]
+        }) as string;
+      } catch (err) {
+        console.error("Error fetching pool address from factory in portfolio service", err);
       }
-    }
 
-    const val0 = safeNumber(finalAmt0, token0Info.decimals) * price0;
-    const val1 = safeNumber(finalAmt1, token1Info.decimals) * price1;
-    const liquidityUsd = val0 + val1;
-    lpValueUsd += liquidityUsd;
+      const wmstToken = TOKENS.find((token) => token.symbol === "WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst };
+      const usdcToken = TOKENS.find((token) => token.symbol === "USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc };
 
-    const fees0 = safeNumber(tokensOwed0, token0Info.decimals) * price0;
-    const fees1 = safeNumber(tokensOwed1, token1Info.decimals) * price1;
-    const feesEarnedUsd = fees0 + fees1;
+      const match0 = TOKENS.find((token) => token.address?.toLowerCase() === token0Address.toLowerCase());
+      const token0Info = match0 || (token0Address.toLowerCase() === CONTRACTS.usdc?.toLowerCase() ? usdcToken : { symbol: "USDC", decimals: 18, address: token0Address });
 
-    // Calculate dynamic APR based on live pool reserves and fee tier
-    let positionApr = 12.4;
-    if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
-      try {
-        const [poolBal0, poolBal1] = await Promise.all([
-          publicClient.readContract({
-            address: token0Address,
-            abi: ERC20_ABI,
-            functionName: "balanceOf",
-            args: [poolAddress as Address]
-          }),
-          publicClient.readContract({
-            address: token1Address,
-            abi: ERC20_ABI,
-            functionName: "balanceOf",
-            args: [poolAddress as Address]
-          })
-        ]);
-        const poolReserve0 = safeNumber(poolBal0, token0Info.decimals);
-        const poolReserve1 = safeNumber(poolBal1, token1Info.decimals);
-        const poolTvl = poolReserve0 * price0 + poolReserve1 * price1;
+      const match1 = TOKENS.find((token) => token.address?.toLowerCase() === token1Address.toLowerCase());
+      const token1Info = match1 || (token1Address.toLowerCase() === CONTRACTS.wmst?.toLowerCase() ? wmstToken : { symbol: "WMST", decimals: 18, address: token1Address });
 
-        if (poolTvl > 0) {
-          const estimatedDailyVolume = poolTvl * 0.18;
-          positionApr = Number(((estimatedDailyVolume * fee * 365) / (poolTvl * 1000000) * 100).toFixed(2));
+      const price0 = token0Info.symbol === "USDC" ? 1.0 : (token0Info.symbol === "WMST" || token0Info.symbol === "MST" || token0Info.symbol === "tMST" ? liveMstPrice : (token0Info as any).priceUsd ?? 0);
+      const price1 = token1Info.symbol === "USDC" ? 1.0 : (token1Info.symbol === "WMST" || token1Info.symbol === "MST" || token1Info.symbol === "tMST" ? liveMstPrice : (token1Info as any).priceUsd ?? 0);
+
+      let finalAmt0 = 0n;
+      let finalAmt1 = 0n;
+
+      if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
+        try {
+          const slot0 = await publicClient.readContract({
+            address: poolAddress as Address,
+            abi: poolAbi,
+            functionName: "slot0"
+          }) as any;
+          const sqrtPriceX96 = slot0[0];
+          const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+            lpLiquidity,
+            sqrtPriceX96,
+            tickLower,
+            tickUpper
+          );
+          finalAmt0 = calcAmt0;
+          finalAmt1 = calcAmt1;
+        } catch (mathErr) {
+          console.error(`Failed calculating V3 reserves for tokenId ${tokenId}`, mathErr);
         }
-      } catch (aprErr) {
-        console.error("Error computing dynamic position APR", aprErr);
       }
-    }
 
-    positions.push({
-      id: tokenId.toString(),
-      pool: `${token0Info.symbol} / ${token1Info.symbol} ${(fee / 10000).toFixed(2)}%`,
-      assets: [token0Info.symbol, token1Info.symbol],
-      network: chainLabel(chainId),
-      liquidityUsd,
-      apr: positionApr,
-      feesEarnedUsd,
-      status: "In Range",
-      hash: poolAddress,
-    });
-  }
+      const val0 = safeNumber(finalAmt0, token0Info.decimals) * price0;
+      const val1 = safeNumber(finalAmt1, token1Info.decimals) * price1;
+      const liquidityUsd = val0 + val1;
+
+      const fees0 = safeNumber(tokensOwed0, token0Info.decimals) * price0;
+      const fees1 = safeNumber(tokensOwed1, token1Info.decimals) * price1;
+      const feesEarnedUsd = fees0 + fees1;
+
+      // Calculate dynamic APR based on live pool reserves and fee tier
+      let positionApr = 12.4;
+      if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
+        try {
+          const [poolBal0, poolBal1] = await Promise.all([
+            publicClient.readContract({
+              address: token0Address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [poolAddress as Address]
+            }),
+            publicClient.readContract({
+              address: token1Address,
+              abi: ERC20_ABI,
+              functionName: "balanceOf",
+              args: [poolAddress as Address]
+            })
+          ]);
+          const poolReserve0 = safeNumber(poolBal0, token0Info.decimals);
+          const poolReserve1 = safeNumber(poolBal1, token1Info.decimals);
+          const poolTvl = poolReserve0 * price0 + poolReserve1 * price1;
+
+          if (poolTvl > 0) {
+            const estimatedDailyVolume = poolTvl * 0.18;
+            positionApr = Number(((estimatedDailyVolume * fee * 365) / (poolTvl * 1000000) * 100).toFixed(2));
+          }
+        } catch (aprErr) {
+          console.error("Error computing dynamic position APR", aprErr);
+        }
+      }
+
+      return {
+        position: {
+          id: tokenId.toString(),
+          pool: `${token0Info.symbol} / ${token1Info.symbol} ${(fee / 10000).toFixed(2)}%`,
+          assets: [token0Info.symbol, token1Info.symbol] as [string, string],
+          network: chainLabel(chainId),
+          liquidityUsd,
+          apr: positionApr,
+          feesEarnedUsd,
+          status: "In Range" as const,
+          hash: poolAddress,
+        },
+        liquidityUsd
+      };
+    })
+  );
+
+  const positions = positionsAndLp.map(x => x.position);
+  const lpValueUsd = positionsAndLp.reduce((sum, x) => sum + x.liquidityUsd, 0);
 
   // Fetch on-chain transaction activity
   let activity: PortfolioActivity[] = [];

@@ -12,12 +12,23 @@ import ExplorePage from "./pages/ExplorePage";
 import LiquidityPage from "./pages/LiquidityPage";
 import WalletPage from "./pages/WalletPage";
 import PortfolioPageWrapper from "./pages/PortfolioPage";
+import PoolDetailsPage from "./pages/PoolDetailsPage";
+import TokenDetailsPage from "./pages/TokenDetailsPage";
+import { ToastContainer } from "./components/ui/ToastContainer";
 
 import { Menu, X, Sun, Moon, Wallet, CheckCircle2, AlertCircle, Power, PlugZap, ExternalLink, ChevronDown } from "lucide-react";
 import { useThemeStore } from "./store/themeStore";
 import { mstChain } from "./config/chains";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      staleTime: 30000,
+    },
+  },
+});
 
 function Navigation() {
   const [isOpen, setIsOpen] = useState(false);
@@ -439,6 +450,9 @@ function MainLayout() {
       {/* Global persistent 3D WebGL Canvas Background */}
       <BackgroundCanvas />
 
+      {/* Global Toast Alerts */}
+      <ToastContainer />
+
       {/* Navigation Navbar */}
       <Navigation />
 
@@ -456,6 +470,8 @@ function MainLayout() {
             <Route path="/liquidity" element={<LiquidityPage />} />
             <Route path="/portfolio" element={<PortfolioPageWrapper />} />
             <Route path="/wallet" element={<WalletPage />} />
+            <Route path="/pools/:address" element={<PoolDetailsPage />} />
+            <Route path="/tokens/:address" element={<TokenDetailsPage />} />
           </Routes>
         </Suspense>
       </div>

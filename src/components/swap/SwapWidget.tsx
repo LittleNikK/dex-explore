@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
-import { formatUnits, parseUnits, type Address } from "viem";
+import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
+import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
+import { swapService } from "../../services/swap.service";
 import { mstChain } from "../../config/chains";
 import { useSwapStore } from "../../store/swapStore";
 import { TokenLogo } from "./TokenLogos";
@@ -172,7 +173,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       active = false;
       clearInterval(interval);
     };
-  }, [publicClient]);
+  }, [chainId]);
 
   // Dynamic step determination based on input conditions & allowance
   useEffect(() => {
@@ -242,7 +243,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     return () => {
       active = false;
     };
-  }, [amountIn, tokenIn, tokenOut, address, isConnected, publicClient, refreshTrigger]);
+  }, [amountIn, tokenIn, tokenOut, address, isConnected, chainId, refreshTrigger]);
 
   const refreshSteps = async () => {
     if (!isConnected || !address || !publicClient || !amountIn || Number(amountIn) <= 0 || !inputToken || !outputToken) {
@@ -361,7 +362,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenIn, inputToken, publicClient, nativeBalanceData, refreshTrigger]);
+  }, [address, isConnected, tokenIn, inputToken, chainId, nativeBalanceData, refreshTrigger]);
 
   useEffect(() => {
     let active = true;
@@ -396,7 +397,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenOut, outputToken, publicClient, nativeBalanceData, refreshTrigger]);
+  }, [address, isConnected, tokenOut, outputToken, chainId, nativeBalanceData, refreshTrigger]);
 
   // Handle Concentrated Pool Quotes
   useEffect(() => {
@@ -455,7 +456,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       active = false;
       clearTimeout(delayDebounce);
     };
-  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, publicClient, liveMstPrice, useRouterApi, refreshTrigger]);
+  }, [amountIn, isReadyAmount, tokenIn, tokenOut, inputToken, outputToken, chainId, liveMstPrice, useRouterApi, refreshTrigger]);
 
   const exchangeRateString = useMemo(() => {
     if (!amountIn || !amountOut || Number(amountIn) <= 0 || Number(amountOut) <= 0) {
@@ -673,8 +674,90 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
         setTxHash(hash);
         setStatusText("Submitting to MST Blockchain Node...");
-        await publicClient.waitForTransactionReceipt({ hash });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
         
+        // Log swap to backend database
+        try {
+          const poolAddress = await publicClient.readContract({
+            address: CONTRACTS.factory,
+            abi: uniswapV3FactoryAbi,
+            functionName: "getPool",
+            args: [swapInAddress, swapOutAddress, V3_FEE]
+          }) as string;
+
+          const SWAP_EVENT_ABI = [
+            {
+              type: "event",
+              name: "Swap",
+              inputs: [
+                { indexed: true, name: "sender", type: "address" },
+                { indexed: true, name: "recipient", type: "address" },
+                { indexed: false, name: "amount0", type: "int256" },
+                { indexed: false, name: "amount1", type: "int256" },
+                { indexed: false, name: "sqrtPriceX96", type: "uint160" },
+                { indexed: false, name: "liquidity", type: "uint128" },
+                { indexed: false, name: "tick", type: "int24" }
+              ]
+            }
+          ] as const;
+
+          let rawAmountIn = amountRaw.toString();
+          let rawAmountOut = estimatedOut.toString();
+
+          if (receipt && receipt.logs) {
+            for (const log of receipt.logs) {
+              try {
+                const decoded = decodeEventLog({
+                  abi: SWAP_EVENT_ABI,
+                  data: log.data,
+                  topics: log.topics
+                });
+                if (decoded.eventName === "Swap") {
+                  const amt0 = BigInt(decoded.args.amount0.toString());
+                  const amt1 = BigInt(decoded.args.amount1.toString());
+                  const isWmstToken0 = swapInAddress.toLowerCase() < swapOutAddress.toLowerCase();
+                  
+                  if (isWmstToken0) {
+                    rawAmountIn = amt0 > 0n ? amt0.toString() : (-amt0).toString();
+                    rawAmountOut = amt1 < 0n ? (-amt1).toString() : amt1.toString();
+                  } else {
+                    rawAmountIn = amt1 > 0n ? amt1.toString() : (-amt1).toString();
+                    rawAmountOut = amt0 < 0n ? (-amt0).toString() : amt0.toString();
+                  }
+                  break;
+                }
+              } catch (e) {
+                // Ignore decoding errors
+              }
+            }
+          }
+
+          const decIn = tokenIn === "MST" ? 18 : inputToken?.decimals ?? 18;
+          const decOut = tokenOut === "MST" ? 18 : outputToken?.decimals ?? 18;
+          
+          const amountInFormatted = Number(formatUnits(BigInt(rawAmountIn), decIn));
+          const amountOutFormatted = Number(formatUnits(BigInt(rawAmountOut), decOut));
+
+          const isWmstToken0 = swapInAddress.toLowerCase() < swapOutAddress.toLowerCase();
+          const swapPrice = isWmstToken0 
+            ? (amountInFormatted > 0 ? amountOutFormatted / amountInFormatted : 0)
+            : (amountOutFormatted > 0 ? amountInFormatted / amountOutFormatted : 0);
+
+          await swapService.recordSwap({
+            walletAddress: address!,
+            poolAddress,
+            tokenIn: swapInAddress.toLowerCase(),
+            tokenOut: swapOutAddress.toLowerCase(),
+            amountIn: rawAmountIn,
+            amountOut: rawAmountOut,
+            txHash: hash,
+            chainId: chainId!,
+            price: swapPrice,
+          });
+        } catch (backendErr) {
+          console.error("Failed to log swap to backend:", backendErr);
+        }
+
         // If there is no unwrapping step next, complete the swap
         if (tokenOut !== "MST") {
           setStatusText("Swap confirmed!");
