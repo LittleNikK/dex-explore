@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { formatPortfolioPct, formatAssetUsd, formatAssetPrice } from "../utils/portfolio-format";
-import { displayTokenSymbol } from "@/config/contracts";
+import { displayTokenSymbol } from "@/config";
 import type { PortfolioAsset } from "../types";
 
 const PAGE_SIZE = 6;

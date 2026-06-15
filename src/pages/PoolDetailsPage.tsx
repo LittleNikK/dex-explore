@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft, ExternalLink, ShieldCheck, Activity as ActivityIcon, Coins } from "lucide-react";
-import { usePool, useCandles, useActivity } from "../hooks/api";
+import { usePool, useCandles, useActivity, useToken } from "../hooks/api";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import CandlestickChart from "../components/charts/CandlestickChart";
 import { useThemeStore } from "../store/themeStore";
@@ -9,6 +9,17 @@ import { formatUnits } from "viem";
 import { fmtNumber, fmtUsd, shortAddress } from "../lib/format";
 
 const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+
+const safeParseBigInt = (val: string | number | undefined | null): bigint => {
+  if (!val) return 0n;
+  const str = typeof val === "number" ? val.toFixed(0) : String(val);
+  const cleanStr = str.split(".")[0];
+  try {
+    return BigInt(cleanStr);
+  } catch (e) {
+    return 0n;
+  }
+};
 
 export default function PoolDetailsPage() {
   const { address } = useParams<{ address: string }>();
@@ -23,6 +34,13 @@ export default function PoolDetailsPage() {
   const pool = poolQuery.data;
   const rawCandles = candlesQuery.data || [];
   const activity = activityQuery.data || [];
+
+  // Fetch token details dynamically for correct decimals
+  const token0Query = useToken(pool?.token0Address);
+  const token1Query = useToken(pool?.token1Address);
+
+  const token0Decimals = token0Query.data?.decimals ?? 18;
+  const token1Decimals = token1Query.data?.decimals ?? 18;
 
   // Transform backend candles to Lightweight-charts format
   const chartData = rawCandles.map((c) => ({
@@ -62,21 +80,11 @@ export default function PoolDetailsPage() {
   const token1Symbol = pool.token1Symbol;
 
   // Format Reserves
-  const formattedRes0 = pool.token0Address.toLowerCase() === "0x3468b4ac95f03534a15f633790d9bbd88b130170".toLowerCase()
-    ? formatUnits(BigInt(pool.currentToken0Amount), 18) // USDC is 18 decimals on this testnet config
-    : formatUnits(BigInt(pool.currentToken0Amount), 18);
+  const formattedRes0 = formatUnits(safeParseBigInt(pool.currentToken0Amount), token0Decimals);
+  const formattedRes1 = formatUnits(safeParseBigInt(pool.currentToken1Amount), token1Decimals);
 
-  const formattedRes1 = pool.token1Address.toLowerCase() === "0x3468b4ac95f03534a15f633790d9bbd88b130170".toLowerCase()
-    ? formatUnits(BigInt(pool.currentToken1Amount), 18)
-    : formatUnits(BigInt(pool.currentToken1Amount), 18);
-
-  const formattedInitRes0 = pool.token0Address.toLowerCase() === "0x3468b4ac95f03534a15f633790d9bbd88b130170".toLowerCase()
-    ? formatUnits(BigInt(pool.token0InitialAmount), 18)
-    : formatUnits(BigInt(pool.token0InitialAmount), 18);
-
-  const formattedInitRes1 = pool.token1Address.toLowerCase() === "0x3468b4ac95f03534a15f633790d9bbd88b130170".toLowerCase()
-    ? formatUnits(BigInt(pool.token1InitialAmount), 18)
-    : formatUnits(BigInt(pool.token1InitialAmount), 18);
+  const formattedInitRes0 = formatUnits(safeParseBigInt(pool.token0InitialAmount), token0Decimals);
+  const formattedInitRes1 = formatUnits(safeParseBigInt(pool.token1InitialAmount), token1Decimals);
 
   return (
     <div className="relative min-h-screen px-4 pb-20 pt-10 font-sans max-w-7xl mx-auto">
@@ -281,7 +289,7 @@ export default function PoolDetailsPage() {
           Live Pool Activity Feed
         </h3>
 
-        {activityQuery.isLoading ? (
+        {activityQuery.isLoading || token0Query.isLoading || token1Query.isLoading ? (
           <div className="py-10 text-center text-xs font-mono text-zinc-500 animate-pulse uppercase">
             Syncing Transactions Stream...
           </div>
@@ -310,49 +318,75 @@ export default function PoolDetailsPage() {
                 </tr>
               </thead>
               <tbody className={`divide-y font-medium ${isDark ? "divide-[#2C364F]/30" : "divide-zinc-200/40"}`}>
-                {activity.map((item) => (
-                  <tr key={item._id} className="hover:bg-cyan-500/5 transition-colors">
-                    <td className="py-4 px-4">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider border
-                        ${item.type === "swap"
-                          ? isDark ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-400" : "bg-cyan-500/15 border-cyan-500/20 text-cyan-700"
-                          : item.type === "add-liquidity"
-                            ? isDark ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-emerald-500/15 border-emerald-500/20 text-emerald-700"
-                            : isDark ? "bg-rose-500/10 border-rose-500/30 text-rose-400" : "bg-rose-500/15 border-rose-500/20 text-rose-700"
-                        }`}
-                      >
-                        {item.type}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4 font-mono text-xs text-muted-foreground hover:text-foreground">
-                      <a href={`https://testnet.mstscan.com/address/${item.walletAddress}`} target="_blank" rel="noreferrer">
-                        {shortAddress(item.walletAddress, 6)}
-                      </a>
-                    </td>
-                    <td className="py-4 px-4 font-mono text-xs">
-                      {item.type === "swap" ? (
-                        <span>
-                          {fmtNumber(Number(formatUnits(BigInt(item.amountIn || "0"), 18)))} {item.tokenIn === pool.token0Address.toLowerCase() ? token0Symbol : token1Symbol} ➜{" "}
-                          {fmtNumber(Number(formatUnits(BigInt(item.amountOut || "0"), 18)))} {item.tokenOut === pool.token0Address.toLowerCase() ? token0Symbol : token1Symbol}
+                {activity.map((item) => {
+                  const typeLower = item.type.toLowerCase();
+                  const isSwap = typeLower === "swap";
+                  const isAddLiq = typeLower === "add-liquidity" || typeLower === "add_liquidity";
+                  const isRemoveLiq = typeLower === "remove-liquidity" || typeLower === "remove_liquidity";
+
+                  const decIn = item.tokenIn?.toLowerCase() === pool.token0Address.toLowerCase() ? token0Decimals : token1Decimals;
+                  const decOut = item.tokenOut?.toLowerCase() === pool.token0Address.toLowerCase() ? token0Decimals : token1Decimals;
+
+                  return (
+                    <tr key={item._id} className="hover:bg-cyan-500/5 transition-colors">
+                      <td className="py-4 px-4">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider border
+                          ${isSwap
+                            ? isDark ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-400" : "bg-cyan-500/15 border-cyan-500/20 text-cyan-700"
+                            : isAddLiq
+                              ? isDark ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-emerald-500/15 border-emerald-500/20 text-emerald-700"
+                              : isDark ? "bg-rose-500/10 border-rose-500/30 text-rose-400" : "bg-rose-500/15 border-rose-500/20 text-rose-700"
+                          }`}
+                        >
+                          {typeLower}
                         </span>
-                      ) : (
-                        <span>
-                          Add/Remove reserves: {fmtNumber(Number(formatUnits(BigInt(item.token0Amount || "0"), 18)))} {token0Symbol} +{" "}
-                          {fmtNumber(Number(formatUnits(BigInt(item.token1Amount || "0"), 18)))} {token1Symbol}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-4 px-4 font-mono text-xs text-cyan-400 hover:underline">
-                      <a href={`https://testnet.mstscan.com/tx/${item.txHash}`} target="_blank" rel="noreferrer" className="flex items-center gap-1">
-                        {shortAddress(item.txHash, 6)}
-                        <ExternalLink size={10} />
-                      </a>
-                    </td>
-                    <td className="py-4 px-4 text-muted-foreground text-xs font-light">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-4 px-4 font-mono text-xs text-muted-foreground hover:text-foreground">
+                        <a href={`https://testnet.mstscan.com/address/${item.walletAddress}`} target="_blank" rel="noreferrer">
+                          {shortAddress(item.walletAddress, 6)}
+                        </a>
+                      </td>
+                      <td className="py-4 px-4 font-mono text-xs">
+                        {isSwap ? (
+                          <span className="flex flex-wrap items-center gap-1">
+                            <span className="font-semibold text-cyan-400">
+                              {fmtNumber(Number(formatUnits(safeParseBigInt(item.amountIn), decIn)))}
+                            </span>{" "}
+                            {item.tokenIn?.toLowerCase() === pool.token0Address.toLowerCase() ? token0Symbol : token1Symbol}
+                            <span className="text-zinc-500 px-1">➜</span>
+                            <span className="font-semibold text-emerald-400">
+                              {fmtNumber(Number(formatUnits(safeParseBigInt(item.amountOut), decOut)))}
+                            </span>{" "}
+                            {item.tokenOut?.toLowerCase() === pool.token0Address.toLowerCase() ? token0Symbol : token1Symbol}
+                          </span>
+                        ) : (
+                          <span>
+                            <span className="text-zinc-400 uppercase text-[10px] font-bold tracking-wider mr-1.5">
+                              {isAddLiq ? "Deposit" : isRemoveLiq ? "Withdrawal" : "Liquidity"}
+                            </span>
+                            <span className="font-semibold text-zinc-200">
+                              {fmtNumber(Number(formatUnits(safeParseBigInt(item.token0Amount), token0Decimals)))}
+                            </span>{" "}
+                            {token0Symbol} +{" "}
+                            <span className="font-semibold text-zinc-200">
+                              {fmtNumber(Number(formatUnits(safeParseBigInt(item.token1Amount), token1Decimals)))}
+                            </span>{" "}
+                            {token1Symbol}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-4 px-4 font-mono text-xs text-cyan-400 hover:underline">
+                        <a href={`https://testnet.mstscan.com/tx/${item.txHash}`} target="_blank" rel="noreferrer" className="flex items-center gap-1">
+                          {shortAddress(item.txHash, 6)}
+                          <ExternalLink size={10} />
+                        </a>
+                      </td>
+                      <td className="py-4 px-4 text-muted-foreground text-xs font-light">
+                        {new Date(item.createdAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -361,3 +395,4 @@ export default function PoolDetailsPage() {
     </div>
   );
 }
+

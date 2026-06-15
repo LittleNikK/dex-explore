@@ -1,17 +1,668 @@
 import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
-import { usePriceWs } from "../hooks/usePriceWs";
-import { fetchUserSwapsFromSubgraph } from "../features/portfolio/services/subgraph.service";
-import { formatUnits, isAddress, type Address, parseAbiItem } from "viem";
-import { TOKENS, erc20Abi } from "../config/contracts";
+import { formatUnits, isAddress, createPublicClient, http, type Address } from "viem";
+import { TOKENS, getContractAddress, ABIS, poolSwapEvent, poolMintEvent, poolBurnEvent, erc20TransferEvent, erc20ApprovalEvent, wmstDepositEvent, wmstWithdrawalEvent } from "@/config";
+import { mstChain } from "../config/chains";
+import { swapService } from "../services/swap.service";
+import { tokenService } from "../services/token.service";
+import { poolService } from "../services/pool.service";
+import { marketService } from "../services/market.service";
 import { fmtNumber, fmtPct, fmtUsd, shortAddress } from "@/lib/format";
-import { usePools, useTokens, useSwaps, useMarketData } from "../hooks/api";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { useThemeStore } from "../store/themeStore";
 import { Search, Database, ListCollapse, ShieldCheck, Info, ExternalLink } from "lucide-react";
 import { motion } from "framer-motion";
+
+const directPublicClient = createPublicClient({
+  chain: mstChain,
+  transport: http("https://testnetrpc.mstblockchain.com"),
+});
+
+const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
+
+async function getTokenMeta(addr: string): Promise<{ symbol: string; decimals: number }> {
+  const lowerAddr = addr.toLowerCase();
+  const existing = TOKENS.find(t => t.symbol === "MST" ? false : t.address?.toLowerCase() === lowerAddr);
+  if (existing) {
+    return { symbol: existing.symbol, decimals: existing.decimals };
+  }
+  if (tokenMetaCache.has(lowerAddr)) {
+    return tokenMetaCache.get(lowerAddr)!;
+  }
+  try {
+    const [symbol, decimals] = await Promise.all([
+      directPublicClient.readContract({
+        address: addr as Address,
+        abi: ABIS.erc20,
+        functionName: "symbol"
+      }),
+      directPublicClient.readContract({
+        address: addr as Address,
+        abi: ABIS.erc20,
+        functionName: "decimals"
+      })
+    ]);
+    const meta = { symbol: symbol as string, decimals: Number(decimals) };
+    tokenMetaCache.set(lowerAddr, meta);
+    return meta;
+  } catch (err) {
+    console.error(`Error fetching meta for token ${addr}:`, err);
+    const fallback = { symbol: "ERC20", decimals: 18 };
+    tokenMetaCache.set(lowerAddr, fallback);
+    return fallback;
+  }
+}
+
+interface ExploreAnalytics {
+  tvlUsd: number;
+  volume24h: number;
+  fees24h: number;
+  activePairs: number;
+  tvlDelta: number;
+  volumeDelta: number;
+  feesDelta: number;
+  activePairsDelta: number;
+  tokens: Array<{
+    symbol: string;
+    name: string;
+    priceUsd: number;
+    change24h: number;
+    volume24h: number;
+    tvl: number;
+    address: string;
+  }>;
+  pools: Array<{
+    address: string;
+    token0: string;
+    token1: string;
+    feeTier: number;
+    tvl: number;
+    volume24h: number;
+    apr: number;
+    protocol: string;
+  }>;
+  transactions: Array<{
+    hash: string;
+    type: "swap" | "add" | "remove" | "wrap" | "unwrap";
+    token0: string;
+    token1: string;
+    usd: number;
+    account: string;
+    timestamp: number;
+    amountIn: number;
+    amountOut: number;
+  }>;
+}
+
+async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<ExploreAnalytics> {
+  const lpStateStorage = getContractAddress("lpStateStorage");
+  const poolId = lpStateStorage ?
+    (await directPublicClient.readContract({
+      address: lpStateStorage,
+      abi: ABIS.lpStateStorage,
+      functionName: "poolAddress"
+    }).catch(() => null)) : null;
+
+  const targetPool = poolId || getContractAddress("pool");
+  const wmstAddress = getContractAddress("wmst");
+  const usdcAddress = getContractAddress("usdc");
+  const usdcDecimals = Number(import.meta.env.VITE_USDC_DECIMALS || 18);
+
+  // 1. Fetch live MST price from slot0
+  let liveMstPrice = 1.85;
+  try {
+    const slot0 = await directPublicClient.readContract({
+      address: targetPool as Address,
+      abi: ABIS.pool,
+      functionName: "slot0"
+    });
+    if (slot0 && slot0[0] > 0n) {
+      const Q96 = 2n ** 96n;
+      const priceOfUsdcInWmst = (Number(slot0[0]) / Number(Q96)) ** 2;
+      if (priceOfUsdcInWmst > 0) {
+        liveMstPrice = 1 / priceOfUsdcInWmst;
+      }
+    }
+  } catch (err) {
+    console.error("Error reading spot price from pool slot0 in explore page", err);
+  }
+
+  // 2. Fetch reserves (pool balances)
+  let wmstReserve = 0;
+  let usdcReserve = 0;
+  try {
+    const [wmstBal, usdcBal] = await Promise.all([
+      directPublicClient.readContract({
+        address: wmstAddress,
+        abi: ABIS.erc20,
+        functionName: "balanceOf",
+        args: [targetPool as Address]
+      }),
+      directPublicClient.readContract({
+        address: usdcAddress,
+        abi: ABIS.erc20,
+        functionName: "balanceOf",
+        args: [targetPool as Address]
+      })
+    ]);
+    wmstReserve = Number(formatUnits(wmstBal as bigint, 18));
+    usdcReserve = Number(formatUnits(usdcBal as bigint, 18));
+  } catch (err) {
+    console.error("Error reading pool reserves in explore page", err);
+  }
+
+  // 3. Fetch backend data and on-chain logs in parallel
+  let backendSwaps: any[] = [];
+  let backendTokens: any[] = [];
+  let backendPools: any[] = [];
+  let backendMarketData: any[] = [];
+  let mintLogs: any[] = [];
+  let burnLogs: any[] = [];
+  let depositLogs: any[] = [];
+  let withdrawalLogs: any[] = [];
+
+  try {
+    const latestBlock = await directPublicClient.getBlockNumber().catch(() => 0n);
+    const fromBlock = latestBlock > 50000n ? latestBlock - 50000n : 0n; // last ~50k blocks for recent activity
+
+    const [swapsRes, tokensRes, poolsRes, marketDataRes, mintLogsRes, burnLogsRes, depositLogsRes, withdrawalLogsRes] = await Promise.all([
+      swapService.getSwaps().catch(() => []),
+      tokenService.getTokens().catch(() => []),
+      poolService.getPools().catch(() => []),
+      marketService.getMarketData().catch(() => []),
+      directPublicClient.getLogs({
+        address: targetPool as Address,
+        event: poolMintEvent,
+        fromBlock,
+        toBlock: "latest"
+      }).catch(() => []),
+      directPublicClient.getLogs({
+        address: targetPool as Address,
+        event: poolBurnEvent,
+        fromBlock,
+        toBlock: "latest"
+      }).catch(() => []),
+      directPublicClient.getLogs({
+        address: wmstAddress as Address,
+        event: wmstDepositEvent,
+        fromBlock,
+        toBlock: "latest"
+      }).catch(() => []),
+      directPublicClient.getLogs({
+        address: wmstAddress as Address,
+        event: wmstWithdrawalEvent,
+        fromBlock,
+        toBlock: "latest"
+      }).catch(() => [])
+    ]);
+
+    backendSwaps = swapsRes;
+    backendTokens = tokensRes;
+    backendPools = poolsRes;
+    backendMarketData = marketDataRes;
+    mintLogs = mintLogsRes;
+    burnLogs = burnLogsRes;
+    depositLogs = depositLogsRes;
+    withdrawalLogs = withdrawalLogsRes;
+  } catch (err) {
+    console.error("Error reading logs and backend data in explore page", err);
+  }
+
+  const txs: any[] = [];
+  const isWmstToken0 = wmstAddress.toLowerCase() < usdcAddress.toLowerCase();
+
+  const getPrice = (addr: string, symbol: string) => {
+    const match = backendMarketData.find(m => m.tokenAddress.toLowerCase() === addr.toLowerCase());
+    if (match) return match.price;
+    if (symbol === "USDC") return 1.0;
+    if (symbol === "WMST" || symbol === "MST") return liveMstPrice;
+    return 0;
+  };
+
+  // Determine timestamps
+  const now = Date.now();
+  let rangeAgo = now - 24 * 60 * 60 * 1000;
+  let rangePrecedingAgo = now - 48 * 60 * 60 * 1000;
+
+  if (range === "1H") {
+    rangeAgo = now - 1 * 60 * 60 * 1000;
+    rangePrecedingAgo = now - 2 * 60 * 60 * 1000;
+  } else if (range === "1D") {
+    rangeAgo = now - 24 * 60 * 60 * 1000;
+    rangePrecedingAgo = now - 48 * 60 * 60 * 1000;
+  } else if (range === "1W") {
+    rangeAgo = now - 7 * 24 * 60 * 60 * 1000;
+    rangePrecedingAgo = now - 14 * 24 * 60 * 60 * 1000;
+  } else if (range === "1M") {
+    rangeAgo = now - 30 * 24 * 60 * 60 * 1000;
+    rangePrecedingAgo = now - 60 * 24 * 60 * 60 * 1000;
+  }
+
+  // Parse swaps from backend
+  let volumeRange = 0;
+  let volumePrecedingRange = 0;
+
+  for (const s of backendSwaps) {
+    const tokenInMeta = TOKENS.find(t => t.address?.toLowerCase() === s.tokenIn.toLowerCase()) || backendTokens.find(t => t.tokenAddress.toLowerCase() === s.tokenIn.toLowerCase());
+    const tokenOutMeta = TOKENS.find(t => t.address?.toLowerCase() === s.tokenOut.toLowerCase()) || backendTokens.find(t => t.tokenAddress.toLowerCase() === s.tokenOut.toLowerCase());
+    const t0Symbol = tokenInMeta ? tokenInMeta.symbol : (s.tokenIn.toLowerCase() === wmstAddress.toLowerCase() ? "WMST" : "USDC");
+    const t1Symbol = tokenOutMeta ? tokenOutMeta.symbol : (s.tokenOut.toLowerCase() === wmstAddress.toLowerCase() ? "WMST" : "USDC");
+
+    const decIn = tokenInMeta?.decimals ?? 18;
+    const decOut = tokenOutMeta?.decimals ?? 18;
+    const amtIn = Number(formatUnits(BigInt(s.amountIn), decIn));
+    const amtOut = Number(formatUnits(BigInt(s.amountOut), decOut));
+    const usdValue = t0Symbol === "USDC" ? amtIn : (t1Symbol === "USDC" ? amtOut : amtIn * liveMstPrice);
+
+    const swapTimestamp = new Date(s.createdAt).getTime();
+    if (swapTimestamp >= rangeAgo) {
+      volumeRange += usdValue;
+    } else if (swapTimestamp >= rangePrecedingAgo) {
+      volumePrecedingRange += usdValue;
+    }
+
+    txs.push({
+      hash: s.txHash,
+      type: "swap",
+      token0: t0Symbol,
+      token1: t1Symbol,
+      usd: usdValue,
+      account: s.walletAddress,
+      timestamp: swapTimestamp,
+      blockNumber: 0n,
+      amountIn: amtIn,
+      amountOut: amtOut
+    });
+  }
+
+  // Parse mints (Add liquidity)
+  for (const log of mintLogs) {
+    const { amount0, amount1, owner } = log.args;
+    if (amount0 !== undefined && amount1 !== undefined) {
+      const wmstDec = isWmstToken0 ? amount0 : amount1;
+      const usdcDec = isWmstToken0 ? amount1 : amount0;
+
+      const wmstAmt = Number(formatUnits(wmstDec, 18));
+      const usdcAmt = Number(formatUnits(usdcDec, 18));
+      const usdValue = wmstAmt * liveMstPrice + usdcAmt;
+
+      txs.push({
+        hash: log.transactionHash,
+        blockNumber: log.blockNumber,
+        type: "add",
+        token0: "WMST",
+        token1: "USDC",
+        usd: usdValue,
+        account: owner || "0x",
+        timestamp: 0,
+        amountIn: wmstAmt,
+        amountOut: usdcAmt
+      });
+    }
+  }
+
+  // Parse burns (Remove liquidity)
+  for (const log of burnLogs) {
+    const { amount0, amount1, owner } = log.args;
+    if (amount0 !== undefined && amount1 !== undefined) {
+      const wmstDec = isWmstToken0 ? amount0 : amount1;
+      const usdcDec = isWmstToken0 ? amount1 : amount0;
+
+      const wmstAmt = Number(formatUnits(wmstDec, 18));
+      const usdcAmt = Number(formatUnits(usdcDec, 18));
+      const usdValue = wmstAmt * liveMstPrice + usdcAmt;
+
+      txs.push({
+        hash: log.transactionHash,
+        blockNumber: log.blockNumber,
+        type: "remove",
+        token0: "WMST",
+        token1: "USDC",
+        usd: usdValue,
+        account: owner || "0x",
+        timestamp: 0,
+        amountIn: wmstAmt,
+        amountOut: usdcAmt
+      });
+    }
+  }
+
+  // Parse wrap logs (deposits)
+  for (const log of depositLogs) {
+    const { dst, wad } = log.args;
+    if (wad !== undefined) {
+      const wadAmt = Number(formatUnits(wad, 18));
+      const usdValue = wadAmt * liveMstPrice;
+
+      txs.push({
+        hash: log.transactionHash,
+        blockNumber: log.blockNumber,
+        type: "wrap",
+        token0: "tMST",
+        token1: "WMST",
+        usd: usdValue,
+        account: dst || "0x",
+        timestamp: 0,
+        amountIn: wadAmt,
+        amountOut: wadAmt
+      });
+    }
+  }
+
+  // Parse unwrap logs (withdrawals)
+  for (const log of withdrawalLogs) {
+    const { src, wad } = log.args;
+    if (wad !== undefined) {
+      const wadAmt = Number(formatUnits(wad, 18));
+      const usdValue = wadAmt * liveMstPrice;
+
+      txs.push({
+        hash: log.transactionHash,
+        blockNumber: log.blockNumber,
+        type: "unwrap",
+        token0: "WMST",
+        token1: "tMST",
+        usd: usdValue,
+        account: src || "0x",
+        timestamp: 0,
+        amountIn: wadAmt,
+        amountOut: wadAmt
+      });
+    }
+  }
+
+  // Get all txs that need block timestamps (timestamp === 0)
+  const txsNeedingTimestamp = txs.filter(t => t.timestamp === 0);
+  const uniqueBlockNumbers = Array.from(new Set(txsNeedingTimestamp.map(t => t.blockNumber)));
+
+  const blockTimestamps: Record<string, number> = {};
+  await Promise.all(
+    uniqueBlockNumbers.map(async (bn) => {
+      try {
+        const block = await directPublicClient.getBlock({ blockNumber: bn });
+        blockTimestamps[bn.toString()] = Number(block.timestamp) * 1000;
+      } catch {
+        blockTimestamps[bn.toString()] = Date.now();
+      }
+    })
+  );
+
+  txs.forEach(t => {
+    if (t.timestamp === 0) {
+      t.timestamp = blockTimestamps[t.blockNumber.toString()] || Date.now();
+    }
+  });
+
+  // Sort by timestamp descending
+  txs.sort((a, b) => b.timestamp - a.timestamp);
+
+  // Filter txs to be within the active range
+  const filteredTxs = txs.filter(t => t.timestamp >= rangeAgo);
+  const recentTxs = filteredTxs.slice(0, 50);
+
+  // Helper functions for historical prices
+  const getMstPriceAt = (targetTime: number): number => {
+    const wmstAddrLower = wmstAddress.toLowerCase();
+    const usdcAddrLower = usdcAddress.toLowerCase();
+
+    // Find all swaps between WMST and USDC
+    const mstUsdcSwaps = backendSwaps.filter((s: any) =>
+      (s.tokenIn.toLowerCase() === wmstAddrLower && s.tokenOut.toLowerCase() === usdcAddrLower) ||
+      (s.tokenIn.toLowerCase() === usdcAddrLower && s.tokenOut.toLowerCase() === wmstAddrLower)
+    );
+
+    if (mstUsdcSwaps.length === 0) {
+      return liveMstPrice;
+    }
+
+    const sorted = [...mstUsdcSwaps].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let targetSwap = sorted[0];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (new Date(sorted[i].createdAt).getTime() <= targetTime) {
+        targetSwap = sorted[i];
+        break;
+      }
+    }
+
+    const decIn = targetSwap.tokenIn.toLowerCase() === usdcAddrLower ? usdcDecimals : 18;
+    const decOut = targetSwap.tokenOut.toLowerCase() === usdcAddrLower ? usdcDecimals : 18;
+    const amtIn = Number(formatUnits(BigInt(targetSwap.amountIn), decIn));
+    const amtOut = Number(formatUnits(BigInt(targetSwap.amountOut), decOut));
+
+    if (targetSwap.tokenIn.toLowerCase() === usdcAddrLower) {
+      return amtOut > 0 ? amtIn / amtOut : liveMstPrice;
+    } else {
+      return amtIn > 0 ? amtOut / amtIn : liveMstPrice;
+    }
+  };
+
+  const getTokenPriceAt = (tokenAddress: string, targetTime: number, currentPrice: number): number => {
+    const lowerAddr = tokenAddress.toLowerCase();
+
+    if (lowerAddr === usdcAddress.toLowerCase()) return 1.0;
+    if (lowerAddr === wmstAddress.toLowerCase()) return getMstPriceAt(targetTime);
+
+    // Find all swaps involving this token
+    const tokenSwaps = backendSwaps.filter((s: any) =>
+      s.tokenIn.toLowerCase() === lowerAddr || s.tokenOut.toLowerCase() === lowerAddr
+    );
+
+    if (tokenSwaps.length === 0) {
+      return currentPrice;
+    }
+
+    const sorted = [...tokenSwaps].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let targetSwap = sorted[0];
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      if (new Date(sorted[i].createdAt).getTime() <= targetTime) {
+        targetSwap = sorted[i];
+        break;
+      }
+    }
+
+    const tokenInMeta = TOKENS.find(t => t.address?.toLowerCase() === targetSwap.tokenIn.toLowerCase()) || backendTokens.find(t => t.tokenAddress.toLowerCase() === targetSwap.tokenIn.toLowerCase());
+    const tokenOutMeta = TOKENS.find(t => t.address?.toLowerCase() === targetSwap.tokenOut.toLowerCase()) || backendTokens.find(t => t.tokenAddress.toLowerCase() === targetSwap.tokenOut.toLowerCase());
+
+    const decIn = tokenInMeta?.decimals ?? 18;
+    const decOut = tokenOutMeta?.decimals ?? 18;
+    const amtIn = Number(formatUnits(BigInt(targetSwap.amountIn), decIn));
+    const amtOut = Number(formatUnits(BigInt(targetSwap.amountOut), decOut));
+
+    const swapTime = new Date(targetSwap.createdAt).getTime();
+    const mstPriceAtSwap = getMstPriceAt(swapTime);
+
+    const t0Symbol = tokenInMeta ? tokenInMeta.symbol : (targetSwap.tokenIn.toLowerCase() === wmstAddress.toLowerCase() ? "WMST" : "USDC");
+    const t1Symbol = tokenOutMeta ? tokenOutMeta.symbol : (targetSwap.tokenOut.toLowerCase() === wmstAddress.toLowerCase() ? "WMST" : "USDC");
+
+    const usdValue = t0Symbol === "USDC" ? amtIn : (t1Symbol === "USDC" ? amtOut : amtIn * mstPriceAtSwap);
+
+    const isTokenIn = targetSwap.tokenIn.toLowerCase() === lowerAddr;
+    const amt = isTokenIn ? amtIn : amtOut;
+
+    return amt > 0 ? usdValue / amt : currentPrice;
+  };
+
+  // Mapped Tokens List from Backend
+  const tokenList: Array<{
+    symbol: string;
+    name: string;
+    priceUsd: number;
+    change24h: number;
+    volume24h: number;
+    tvl: number;
+    address: string;
+  }> = backendTokens.map((t) => {
+    const priceUsd = getPrice(t.tokenAddress, t.symbol);
+    const priceAtStart = getTokenPriceAt(t.tokenAddress, rangeAgo, priceUsd);
+    const changeRange = priceAtStart > 0 ? ((priceUsd - priceAtStart) / priceAtStart) * 100 : 0;
+
+    // Calculate volume in selected range
+    const tokenSwapsRange = backendSwaps.filter(s =>
+      (s.tokenIn.toLowerCase() === t.tokenAddress.toLowerCase() || s.tokenOut.toLowerCase() === t.tokenAddress.toLowerCase()) &&
+      new Date(s.createdAt).getTime() >= rangeAgo
+    );
+    const tokenVolume = tokenSwapsRange.reduce((sum, s) => {
+      const tokenInMeta = backendTokens.find(tk => tk.tokenAddress.toLowerCase() === s.tokenIn.toLowerCase());
+      const decIn = tokenInMeta ? tokenInMeta.decimals : 18;
+      const amtIn = Number(formatUnits(BigInt(s.amountIn), decIn));
+      const priceIn = getPrice(s.tokenIn, tokenInMeta?.symbol || "");
+      return sum + amtIn * priceIn;
+    }, 0);
+
+    const tokenPools = backendPools.filter(p => p.token0Address.toLowerCase() === t.tokenAddress.toLowerCase() || p.token1Address.toLowerCase() === t.tokenAddress.toLowerCase());
+    const tokenTvl = tokenPools.reduce((sum, p) => {
+      const isToken0 = p.token0Address.toLowerCase() === t.tokenAddress.toLowerCase();
+      const amt = isToken0 ? p.currentToken0Amount : p.currentToken1Amount;
+      const formattedAmt = Number(formatUnits(BigInt(amt), t.decimals));
+      return sum + formattedAmt * priceUsd;
+    }, 0);
+
+    return {
+      symbol: t.symbol,
+      name: t.symbol === "USDC" ? "USD Coin" : (t.symbol === "WMST" ? "Wrapped MST" : t.symbol + " Native"),
+      priceUsd,
+      change24h: changeRange,
+      volume24h: tokenVolume,
+      tvl: tokenTvl,
+      address: t.tokenAddress
+    };
+  });
+
+  // Mapped Pools List from Backend
+  const poolList: Array<{
+    address: string;
+    token0: string;
+    token1: string;
+    feeTier: number;
+    tvl: number;
+    volume24h: number;
+    apr: number;
+    protocol: string;
+  }> = backendPools.map((p) => {
+    const t0 = backendTokens.find(tk => tk.tokenAddress.toLowerCase() === p.token0Address.toLowerCase());
+    const t1 = backendTokens.find(tk => tk.tokenAddress.toLowerCase() === p.token1Address.toLowerCase());
+    const dec0 = t0 ? t0.decimals : 18;
+    const dec1 = t1 ? t1.decimals : 18;
+    const res0 = Number(formatUnits(BigInt(p.currentToken0Amount), dec0));
+    const res1 = Number(formatUnits(BigInt(p.currentToken1Amount), dec1));
+    const poolTvl = res0 * getPrice(p.token0Address, p.token0Symbol) + res1 * getPrice(p.token1Address, p.token1Symbol);
+
+    const poolSwaps = backendSwaps.filter(s => s.poolAddress.toLowerCase() === p.poolAddress.toLowerCase() && new Date(s.createdAt).getTime() >= rangeAgo);
+    const poolVolume = poolSwaps.reduce((sum, s) => {
+      const tokenInMeta = backendTokens.find(tk => tk.tokenAddress.toLowerCase() === s.tokenIn.toLowerCase());
+      const decIn = tokenInMeta ? tokenInMeta.decimals : 18;
+      const amtIn = Number(formatUnits(BigInt(s.amountIn), decIn));
+      const priceIn = getPrice(s.tokenIn, tokenInMeta?.symbol || "");
+      return sum + amtIn * priceIn;
+    }, 0);
+
+    const totalFees = poolVolume * 0.003;
+    let extrapolationFactor = 365;
+    if (range === "1H") {
+      extrapolationFactor = 24 * 365;
+    } else if (range === "1W") {
+      extrapolationFactor = 52;
+    } else if (range === "1M") {
+      extrapolationFactor = 12;
+    }
+    const aprVal = poolTvl > 0 ? (totalFees * extrapolationFactor / poolTvl) * 100 : 12.4;
+
+    return {
+      address: p.poolAddress,
+      token0: p.token0Symbol,
+      token1: p.token1Symbol,
+      feeTier: p.feeTier,
+      tvl: poolTvl,
+      volume24h: poolVolume,
+      apr: aprVal,
+      protocol: p.protocol || "Uniswap V3"
+    };
+  });
+
+  // Calculate global summary states from mapped lists
+  const tvlUsd = poolList.reduce((sum, pl) => sum + pl.tvl, 0) || wmstReserve * liveMstPrice + usdcReserve;
+  const globalVolume24h = poolList.reduce((sum, pl) => sum + pl.volume24h, 0) || volumeRange;
+  const fees24h = globalVolume24h * 0.003;
+  const activePairs = poolList.length || 1;
+
+  // Calculate real-time deltas
+  // 1. Calculate TVL Change (weighted by token TVL)
+  let tvlDeltaSum = 0;
+  let totalTvlForDelta = 0;
+  for (const t of tokenList) {
+    tvlDeltaSum += t.tvl * t.change24h;
+    totalTvlForDelta += t.tvl;
+  }
+  const tvlDelta = totalTvlForDelta > 0 ? Number((tvlDeltaSum / totalTvlForDelta).toFixed(2)) : 0.0;
+
+  // 2. Calculate Volume Change
+  const volumeDelta = volumePrecedingRange > 0
+    ? Number((((volumeRange - volumePrecedingRange) / volumePrecedingRange) * 100).toFixed(2))
+    : 0.0;
+
+  const feesDelta = volumeDelta;
+
+  // 3. Calculate Active Pairs Change
+  const newPoolsCount = backendPools.filter(p => new Date(p.createdAt).getTime() >= rangeAgo).length;
+  const activePairsDelta = backendPools.length > 0
+    ? Number(((newPoolsCount / (backendPools.length - newPoolsCount || 1)) * 100).toFixed(2))
+    : 0.0;
+
+  // Fallbacks for default rendering
+  if (tokenList.length === 0) {
+    tokenList.push(
+      {
+        symbol: "WMST",
+        name: "Wrapped MST",
+        priceUsd: liveMstPrice,
+        change24h: 1.25,
+        volume24h: globalVolume24h * 0.6,
+        tvl: wmstReserve * liveMstPrice,
+        address: wmstAddress
+      },
+      {
+        symbol: "USDC",
+        name: "USD Coin",
+        priceUsd: 1.0,
+        change24h: 0.0,
+        volume24h: globalVolume24h * 0.4,
+        tvl: usdcReserve,
+        address: usdcAddress
+      }
+    );
+  }
+
+  if (poolList.length === 0) {
+    poolList.push({
+      address: targetPool as string,
+      token0: "WMST",
+      token1: "USDC",
+      feeTier: 3000,
+      tvl: tvlUsd,
+      volume24h: globalVolume24h,
+      apr: tvlUsd > 0 ? (fees24h * 365 / tvlUsd) * 100 : 12.4,
+      protocol: "Uniswap V3"
+    });
+  }
+
+  return {
+    tvlUsd,
+    volume24h: globalVolume24h,
+    fees24h,
+    activePairs,
+    tvlDelta,
+    volumeDelta,
+    feesDelta,
+    activePairsDelta,
+    tokens: tokenList,
+    pools: poolList,
+    transactions: recentTxs
+  };
+}
 
 const TABS = ["Tokens", "Pools", "Transactions", "Wallet Explorer"] as const;
 const RANGES = ["1H", "1D", "1W", "1M"] as const;
@@ -37,6 +688,13 @@ export default function ExplorePage() {
   const [tab, setTab] = useState<(typeof TABS)[number]>("Tokens");
   const [range, setRange] = useState<(typeof RANGES)[number]>("1D");
 
+  // Live Explore Page Analytics Query
+  const { data: analytics, isLoading: analyticsLoading } = useQuery({
+    queryKey: ["explore-analytics", range],
+    queryFn: () => fetchExploreData(range),
+    refetchInterval: 10_000
+  });
+
   // Wallet Explorer States
   const publicClient = usePublicClient();
   const [addressInput, setAddressInput] = useState("");
@@ -46,154 +704,6 @@ export default function ExplorePage() {
   const [isSearching, setIsSearching] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Invalidate cache queries dynamically when a socket event is broadcast
-  const queryClient = useQueryClient();
-  usePriceWs(() => {
-    queryClient.invalidateQueries({ queryKey: ["tokens"] });
-    queryClient.invalidateQueries({ queryKey: ["pools"] });
-    queryClient.invalidateQueries({ queryKey: ["swaps"] });
-  });
-
-  const poolsQuery = usePools();
-  const tokensQuery = useTokens();
-  const swapsQuery = useSwaps();
-  const marketDataQuery = useMarketData();
-
-  const getPrice = (address: string) => {
-    const match = marketDataQuery.data?.find(m => m.tokenAddress.toLowerCase() === address.toLowerCase());
-    return match ? match.price : 1.0;
-  };
-
-  const mappedPools = useMemo(() => {
-    const backendPools = poolsQuery.data || [];
-    return backendPools.map((p) => {
-      const res0 = Number(formatUnits(BigInt(p.currentToken0Amount), 18));
-      const res1 = Number(formatUnits(BigInt(p.currentToken1Amount), 18));
-      const price0 = getPrice(p.token0Address);
-      const price1 = getPrice(p.token1Address);
-      const tvl = res0 * price0 + res1 * price1;
-      
-      const swaps = swapsQuery.data || [];
-      const poolSwaps = swaps.filter(s => s.poolAddress.toLowerCase() === p.poolAddress.toLowerCase());
-      const volume24h = poolSwaps.reduce((sum, s) => {
-        const amtOutFormatted = Number(formatUnits(BigInt(s.amountOut), 18));
-        const priceOut = getPrice(s.tokenOut);
-        return sum + amtOutFormatted * priceOut;
-      }, 0);
-
-      const totalVolume = volume24h;
-      const totalFees = totalVolume * 0.003;
-      const apr = tvl > 0 ? (totalFees * 365 / tvl) * 100 : 12.4;
-
-      return {
-        address: p.poolAddress,
-        token0: p.token0Symbol,
-        token1: p.token1Symbol,
-        feeTier: p.feeTier,
-        tvl,
-        volume24h: volume24h || 15000,
-        apr: apr || 12.4,
-      };
-    });
-  }, [poolsQuery.data, swapsQuery.data, marketDataQuery.data]);
-
-  const mappedTokens = useMemo(() => {
-    const backendTokens = tokensQuery.data || [];
-    return backendTokens.map((t) => {
-      const match = marketDataQuery.data?.find(m => m.tokenAddress.toLowerCase() === t.tokenAddress.toLowerCase());
-      const priceUsd = match ? match.price : Number(t.price || "0");
-      const change24h = match ? match.change24h : 0;
-      const volume24h = match ? match.volume24h : 0;
-      
-      const backendPools = poolsQuery.data || [];
-      const tokenPools = backendPools.filter(p => p.token0Address.toLowerCase() === t.tokenAddress.toLowerCase() || p.token1Address.toLowerCase() === t.tokenAddress.toLowerCase());
-      const tvl = tokenPools.reduce((sum, p) => {
-        const isToken0 = p.token0Address.toLowerCase() === t.tokenAddress.toLowerCase();
-        const amt = isToken0 ? p.currentToken0Amount : p.currentToken1Amount;
-        const formattedAmt = Number(formatUnits(BigInt(amt), t.decimals));
-        return sum + formattedAmt * priceUsd;
-      }, 0);
-
-      return {
-        address: t.tokenAddress,
-        symbol: t.symbol,
-        name: t.symbol === "USDC" ? "USD Coin" : (t.symbol === "WMST" ? "Wrapped MST" : "MST Native"),
-        priceUsd,
-        change24h,
-        volume24h,
-        tvl: tvl || 250000,
-      };
-    });
-  }, [tokensQuery.data, marketDataQuery.data, poolsQuery.data]);
-
-  const mappedTxs = useMemo(() => {
-    const backendSwaps = swapsQuery.data || [];
-    return backendSwaps.map((s) => {
-      const pool = poolsQuery.data?.find(p => p.poolAddress.toLowerCase() === s.poolAddress.toLowerCase());
-      const token0Symbol = pool ? pool.token0Symbol : "USDC";
-      const token1Symbol = pool ? pool.token1Symbol : "WMST";
-
-      const amtInFormatted = Number(formatUnits(BigInt(s.amountIn), 18));
-      const priceIn = getPrice(s.tokenIn);
-      const usdValue = amtInFormatted * priceIn;
-
-      return {
-        hash: s.txHash,
-        type: "swap" as const,
-        token0: token0Symbol,
-        token1: token1Symbol,
-        usd: usdValue || 50,
-        account: s.walletAddress,
-        timestamp: new Date(s.createdAt).getTime(),
-      };
-    });
-  }, [swapsQuery.data, poolsQuery.data, marketDataQuery.data]);
-
-  const pools = mappedPools;
-  const tokens = mappedTokens;
-  const txs = mappedTxs;
-
-  const stats = useMemo(() => {
-    if (!pools || pools.length === 0) {
-      return {
-        tvl: "$0.00",
-        volume: "$0.00",
-        fees: "$0.00",
-        pairs: "0",
-        tvlDelta: 2.4,
-        volumeDelta: -1.1,
-        feesDelta: 0.6,
-        pairsDelta: 3.2
-      };
-    }
-    const totalTvl = pools.reduce((sum, p) => sum + (p.tvl || 0), 0);
-    const totalVolume = pools.reduce((sum, p) => sum + (p.volume24h || 0), 0);
-    const totalFees = totalVolume * 0.003; // 0.3% fee tier
-    const pairCount = pools.length;
-
-    // Calculate dynamic deltas from cache/tokens
-    const mstToken = tokens?.find(t => t.symbol === "MST");
-    const tvlDelta = mstToken && mstToken.change24h !== undefined ? Number((mstToken.change24h * 0.5).toFixed(2)) : 2.4;
-    
-    // Volume delta changes dynamically based on transactions length
-    const blockHashVal = (txs?.length || 0) % 7;
-    const volumeDelta = Number(((-1.5 + blockHashVal * 0.6)).toFixed(1));
-    const feesDelta = volumeDelta;
-
-    const pairsDelta = Number(((pairCount * 0.1) % 0.5).toFixed(1)) || 0.0;
-
-    return {
-      tvl: totalTvl >= 1e6 ? `$${(totalTvl / 1e6).toFixed(2)}M` : `$${totalTvl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-      volume: totalVolume >= 1e6 ? `$${(totalVolume / 1e6).toFixed(2)}M` : `$${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-      fees: totalFees >= 1e6 ? `$${(totalFees / 1e6).toFixed(2)}M` : `$${totalFees.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-      pairs: pairCount.toLocaleString(),
-      tvlDelta,
-      volumeDelta,
-      feesDelta,
-      pairsDelta
-    };
-  }, [pools, tokens, txs]);
-
   async function handleExplore() {
     setErrorMsg(null);
     setTokenBalances([]);
@@ -201,11 +711,6 @@ export default function ExplorePage() {
 
     if (!isAddress(addressInput)) {
       setErrorMsg("Please enter a valid EVM address format.");
-      return;
-    }
-
-    if (!publicClient) {
-      setErrorMsg("EVM Provider is not configured.");
       return;
     }
 
@@ -218,15 +723,15 @@ export default function ExplorePage() {
         TOKENS.map(async (token) => {
           if (!token.address) return { ...token, balance: "0.0" };
           try {
-            const rawBal = await publicClient.readContract({
+            const rawBal = await directPublicClient.readContract({
               address: token.address,
-              abi: erc20Abi,
+              abi: ABIS.erc20,
               functionName: "balanceOf",
-              args: [addressInput]
-            });
+              args: [addressInput as Address]
+            } as any);
             return {
               ...token,
-              balance: formatUnits(rawBal, token.decimals)
+              balance: formatUnits(rawBal as bigint, token.decimals)
             };
           } catch {
             return { ...token, balance: "0.0" };
@@ -238,7 +743,7 @@ export default function ExplorePage() {
 
       // 2. Fetch Native MST balance
       try {
-        const nativeBalRaw = await publicClient.getBalance({ address: addressInput });
+        const nativeBalRaw = await directPublicClient.getBalance({ address: addressInput as Address });
         const nativeBal = {
           symbol: "MST",
           name: "Native MST",
@@ -248,116 +753,168 @@ export default function ExplorePage() {
         setTokenBalances((prev) => [nativeBal, ...prev]);
       } catch { }
 
-      // 3. Query dynamic ERC20 Transfer events directly from the blockchain
-      let onChainLogs: ExplorerTx[] = [];
-      try {
-        const tokenAddresses = TOKENS.map(t => t.address).filter((a): a is Address => !!a);
-        const [sentLogs, receivedLogs] = await Promise.all([
-          publicClient.getLogs({
-            address: tokenAddresses,
-            event: parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)"),
-            args: {
-              from: addressInput as Address
-            },
-            fromBlock: 0n
-          }).catch(() => []),
-          publicClient.getLogs({
-            address: tokenAddresses,
-            event: parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)"),
-            args: {
-              to: addressInput as Address
-            },
-            fromBlock: 0n
-          }).catch(() => [])
-        ]);
+      // 3. Fetch logs and parse history
+      const fromBlock = 0n;
 
-        const mergedLogs = [...sentLogs, ...receivedLogs]
-          .sort((a, b) => Number(b.blockNumber - a.blockNumber))
-          .slice(0, 15);
+      const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
+        directPublicClient.getLogs({
+          event: erc20TransferEvent,
+          args: { from: addressInput as Address },
+          fromBlock,
+          toBlock: "latest"
+        }).catch(() => []),
+        directPublicClient.getLogs({
+          event: erc20TransferEvent,
+          args: { to: addressInput as Address },
+          fromBlock,
+          toBlock: "latest"
+        }).catch(() => []),
+        directPublicClient.getLogs({
+          event: erc20ApprovalEvent,
+          args: { owner: addressInput as Address },
+          fromBlock,
+          toBlock: "latest"
+        }).catch(() => [])
+      ]);
 
-        const uniqueBlockNumbers = Array.from(new Set(mergedLogs.map(l => l.blockNumber).filter(Boolean))) as bigint[];
-        const blockTimestamps: Record<string, string> = {};
-        
-        if (uniqueBlockNumbers.length > 0) {
-          await Promise.all(
-            uniqueBlockNumbers.map(async (bn) => {
-              try {
-                const block = await publicClient.getBlock({ blockNumber: bn });
-                blockTimestamps[bn.toString()] = new Date(Number(block.timestamp) * 1000).toLocaleString();
-              } catch {
-                blockTimestamps[bn.toString()] = new Date().toLocaleString();
+      const logsByHash: Record<string, any[]> = {};
+      for (const log of [...sentLogs, ...receivedLogs, ...approvalLogs]) {
+        if (!log.transactionHash) continue;
+        if (!logsByHash[log.transactionHash]) {
+          logsByHash[log.transactionHash] = [];
+        }
+        if (!logsByHash[log.transactionHash].some(l => l.logIndex === log.logIndex)) {
+          logsByHash[log.transactionHash].push(log);
+        }
+      }
+
+      const logsList = Object.entries(logsByHash).map(([hash, logs]) => {
+        const minBlock = Math.min(...logs.map(l => Number(l.blockNumber || 0)));
+        return { hash, logs, minBlock };
+      }).sort((a, b) => b.minBlock - a.minBlock);
+
+      const latestTxHashes = logsList.slice(0, 500);
+
+      const parsedTxsRaw = await Promise.all(
+        latestTxHashes.map(async ({ hash, logs: txLogs }) => {
+          try {
+            const sends = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).from?.toLowerCase() === addressInput.toLowerCase());
+            const receives = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).to?.toLowerCase() === addressInput.toLowerCase());
+            const approvals = txLogs.filter(l => l.eventName === "Approval" && l.args && (l.args as any).owner?.toLowerCase() === addressInput.toLowerCase());
+
+            let method = "Transfer";
+            let details = "";
+
+            if (approvals.length > 0) {
+              method = "Approval";
+              const token = await getTokenMeta(approvals[0].address);
+              const val = (approvals[0].args as any).value || 0n;
+              const amount = Number(formatUnits(val, token.decimals));
+              details = `${token.symbol} spend approved (${amount > 1000000000 ? "Max" : amount.toFixed(2)})`;
+            } else {
+              // Check for Wrap/Unwrap (Transfer to/from zero address) on WMST contract
+              const wrapLog = receives.find(r => r.args && (r.args as any).from === '0x0000000000000000000000000000000000000000');
+              const unwrapLog = sends.find(s => s.args && (s.args as any).to === '0x0000000000000000000000000000000000000000');
+
+              if (wrapLog && wrapLog.address.toLowerCase() === getContractAddress("wmst").toLowerCase()) {
+                method = "Swap";
+                const amount = Number(formatUnits((wrapLog.args as any).value || 0n, 18));
+                details = `${amount.toFixed(2)} MST ➜ ${amount.toFixed(2)} WMST`;
+              } else if (unwrapLog && unwrapLog.address.toLowerCase() === getContractAddress("wmst").toLowerCase()) {
+                method = "Swap";
+                const amount = Number(formatUnits((unwrapLog.args as any).value || 0n, 18));
+                details = `${amount.toFixed(2)} WMST ➜ ${amount.toFixed(2)} MST`;
+              } else {
+                const txObj = await directPublicClient.getTransaction({ hash: hash as Address }).catch(() => null);
+                const toAddress = txObj?.to?.toLowerCase();
+                const isLiquidityTx = txObj && toAddress && (
+                  toAddress === getContractAddress("testingExecutor").toLowerCase() ||
+                  toAddress === getContractAddress("lpStateStorage").toLowerCase() ||
+                  toAddress === getContractAddress("positionManager").toLowerCase()
+                );
+
+                if (isLiquidityTx) {
+                  method = "Liquidity";
+                  if (sends.length > 0) {
+                    const parts = await Promise.all(sends.map(async s => (await getTokenMeta(s.address)).symbol));
+                    details = `Add liquidity: ${parts.filter(Boolean).join(" + ") || "LP Deposit"}`;
+                  } else if (receives.length > 0) {
+                    const parts = await Promise.all(receives.map(async r => (await getTokenMeta(r.address)).symbol));
+                    details = `Remove liquidity: ${parts.filter(Boolean).join(" + ") || "LP Withdrawal"}`;
+                  } else {
+                    details = "LP Interaction";
+                  }
+                } else if (sends.length > 0 && receives.length > 0) {
+                  method = "Swap";
+                  const sendToken = await getTokenMeta(sends[0].address);
+                  const receiveToken = await getTokenMeta(receives[0].address);
+                  if (sendToken && receiveToken) {
+                    const sendAmt = Number(formatUnits((sends[0].args as any).value || 0n, sendToken.decimals));
+                    const receiveAmt = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                    details = `${sendAmt.toFixed(2)} ${sendToken.symbol} ➜ ${receiveAmt.toFixed(2)} ${receiveToken.symbol}`;
+                  } else {
+                    details = "Swap Interaction";
+                  }
+                } else if (sends.length > 0) {
+                  const sendToken = await getTokenMeta(sends[0].address);
+                  if (sendToken) {
+                    const isSwapToNative = txObj && txObj.to?.toLowerCase() === getContractAddress("swapRouter").toLowerCase();
+                    if (isSwapToNative) {
+                      method = "Swap";
+                      const sendAmt = Number(formatUnits((sends[0].args as any).value || 0n, sendToken.decimals));
+                      details = `${sendAmt.toFixed(2)} ${sendToken.symbol} ➜ MST`;
+                    } else {
+                      method = "Send";
+                      const amt = Number(formatUnits((sends[0].args as any).value || 0n, sendToken.decimals));
+                      details = `Send ${amt.toFixed(2)} ${sendToken.symbol}`;
+                    }
+                  }
+                } else if (receives.length > 0) {
+                  const receiveToken = await getTokenMeta(receives[0].address);
+                  if (receiveToken) {
+                    const nativeValueSent = txObj && txObj.from.toLowerCase() === addressInput.toLowerCase() ? Number(formatUnits(txObj.value, 18)) : 0;
+                    if (nativeValueSent > 0) {
+                      method = "Swap";
+                      const receiveAmt = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                      details = `${nativeValueSent.toFixed(2)} MST ➜ ${receiveAmt.toFixed(2)} ${receiveToken.symbol}`;
+                    } else {
+                      method = "Receive";
+                      const amt = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                      details = `Receive ${amt.toFixed(2)} ${receiveToken.symbol}`;
+                    }
+                  }
+                } else {
+                  method = "Contract Call";
+                  details = txObj ? `Interaction with ${shortAddress(txObj.to || "", 6)}` : "Blockchain interaction";
+                }
               }
-            })
-          );
-        }
+            }
 
-        onChainLogs = mergedLogs.map(log => {
-          const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
-          const symbol = token ? token.symbol : "ERC20";
-          const decimals = token ? token.decimals : 18;
-          const valueRaw = log.args.value;
-          const amountFormatted = valueRaw ? Number(formatUnits(valueRaw, decimals)).toFixed(4) : "0.00";
-          const isSend = log.args.from?.toLowerCase() === addressInput.toLowerCase();
-          
-          return {
-            hash: log.transactionHash || "",
-            time: blockTimestamps[log.blockNumber?.toString() || ""] || new Date().toLocaleString(),
-            method: isSend ? "Send" : "Receive",
-            details: isSend 
-              ? `Transfer of ${amountFormatted} ${symbol} to ${log.args.to?.slice(0, 8)}...` 
-              : `Received ${amountFormatted} ${symbol} from ${log.args.from?.slice(0, 8)}...`
-          };
-        });
-      } catch (logErr) {
-        console.error("Error querying ERC20 logs on-chain in explorer", logErr);
-      }
+            let timestamp = Date.now();
+            const firstLog = txLogs[0];
+            if (firstLog && firstLog.blockNumber) {
+              const block = await directPublicClient.getBlock({ blockNumber: firstLog.blockNumber }).catch(() => null);
+              if (block && block.timestamp) {
+                timestamp = Number(block.timestamp) * 1000;
+              }
+            }
 
-      // 4. Fallback sequence: Subgraph -> On-chain Logs -> Simulated logs
-      const simulatedHistory: ExplorerTx[] = [
-        {
-          hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-          time: new Date(Date.now() - 30 * 60000).toLocaleString(),
-          method: "Swap Single",
-          details: "USDC ➜ WMST (0.3% Pool)"
-        },
-        {
-          hash: "0x9876543210abcdef9876543210abcdef9876543210abcdef9876543210abcdef",
-          time: new Date(Date.now() - 140 * 60000).toLocaleString(),
-          method: "Approval",
-          details: "USDC Spend Approved for SwapRouter"
-        },
-        {
-          hash: "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-          time: new Date(Date.now() - 500 * 60000).toLocaleString(),
-          method: "Transfer",
-          details: "Transfer of 5.0 WMST"
-        }
-      ];
+            return {
+              hash,
+              time: new Date(timestamp).toLocaleString(),
+              method,
+              details
+            };
+          } catch (err) {
+            console.error("Error parsing tx logs for hash " + hash, err);
+            return null;
+          }
+        })
+      );
 
-      try {
-        const swaps = await fetchUserSwapsFromSubgraph(addressInput, 91562037);
-        if (swaps && swaps.length > 0) {
-          const formatted = swaps.map((s) => ({
-            hash: s.hash,
-            time: new Date(s.timestamp).toLocaleString(),
-            method: "Swap",
-            details: s.asset
-          }));
-          setTxHistory(formatted);
-        } else if (onChainLogs.length > 0) {
-          setTxHistory(onChainLogs);
-        } else {
-          setTxHistory(simulatedHistory);
-        }
-      } catch (subgraphErr) {
-        console.warn("Subgraph query failed, using on-chain logs", subgraphErr);
-        if (onChainLogs.length > 0) {
-          setTxHistory(onChainLogs);
-        } else {
-          setTxHistory(simulatedHistory);
-        }
-      }
-    } catch {
+      setTxHistory(parsedTxsRaw.filter((t): t is ExplorerTx => t !== null));
+    } catch (err) {
+      console.error(err);
       setErrorMsg("Failed to query data for this wallet.");
     } finally {
       setIsSearching(false);
@@ -371,17 +928,33 @@ export default function ExplorePage() {
         <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent uppercase font-display">
           Market Analytics
         </h1>
-        <p className="text-base text-muted-foreground font-light max-w-xl">
+        <p className="text-sm text-muted-foreground font-light max-w-xl">
           Track real-time token valuations, liquidity pool volumes, and historical swap transaction activity.
         </p>
       </div>
 
       {/* Hero Stats */}
       <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Hero label="TVL" value={stats.tvl} delta={stats.tvlDelta} />
-        <Hero label="24h Volume" value={stats.volume} delta={stats.volumeDelta} />
-        <Hero label="24h Fees" value={stats.fees} delta={stats.feesDelta} />
-        <Hero label="Active pairs" value={stats.pairs} delta={stats.pairsDelta} />
+        <Hero
+          label="TVL"
+          value={analyticsLoading ? "..." : fmtUsd(analytics?.tvlUsd ?? 0)}
+          delta={analytics?.tvlDelta ?? 0}
+        />
+        <Hero
+          label={range === "1H" ? "1h Volume" : range === "1W" ? "7d Volume" : range === "1M" ? "30d Volume" : "24h Volume"}
+          value={analyticsLoading ? "..." : fmtUsd(analytics?.volume24h ?? 0)}
+          delta={analytics?.volumeDelta ?? 0}
+        />
+        <Hero
+          label={range === "1H" ? "1h Fees" : range === "1W" ? "7d Fees" : range === "1M" ? "30d Fees" : "24h Fees"}
+          value={analyticsLoading ? "..." : fmtUsd(analytics?.fees24h ?? 0)}
+          delta={analytics?.feesDelta ?? 0}
+        />
+        <Hero
+          label="Active pairs"
+          value={analyticsLoading ? "..." : (analytics?.activePairs ?? 0).toString()}
+          delta={analytics?.activePairsDelta ?? 0}
+        />
       </div>
 
       {/* Tabs and Ranges Selection */}
@@ -393,11 +966,11 @@ export default function ExplorePage() {
             <button
               key={t}
               onClick={() => setTab(t)}
-              className={`rounded-full px-5 py-2 text-sm font-bold uppercase tracking-wider transition-all duration-200 ${tab === t
-                  ? isDark
-                    ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
-                    : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
-                  : "text-muted-foreground hover:text-foreground border border-transparent"
+              className={`rounded-full px-5 py-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 ${tab === t
+                ? isDark
+                  ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
+                  : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
+                : "text-muted-foreground hover:text-foreground border border-transparent"
                 }`}
             >
               {t}
@@ -413,11 +986,11 @@ export default function ExplorePage() {
               <button
                 key={r}
                 onClick={() => setRange(r)}
-                className={`rounded-full px-4 py-1.5 text-sm font-bold uppercase tracking-wider transition-all duration-200 ${range === r
-                    ? isDark
-                      ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
-                      : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
-                    : "text-muted-foreground hover:text-foreground border border-transparent"
+                className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition-all duration-200 ${range === r
+                  ? isDark
+                    ? "bg-cyan-500/10 text-cyan-400 shadow-[0_8px_20px_-10px_rgba(6,182,212,0.4)] border border-cyan-500/20"
+                    : "bg-white text-zinc-950 shadow-sm border border-zinc-200"
+                  : "text-muted-foreground hover:text-foreground border border-transparent"
                   }`}
               >
                 {r}
@@ -427,9 +1000,27 @@ export default function ExplorePage() {
         )}
       </div>
 
-      {tab === "Tokens" && <TokensTable data={mappedTokens} />}
-      {tab === "Pools" && <PoolsTable data={mappedPools} />}
-      {tab === "Transactions" && <TxTable data={mappedTxs} />}
+      {tab === "Tokens" && (
+        analyticsLoading ? (
+          <div className="p-8 text-center text-sm text-muted-foreground animate-pulse">Loading live tokens data...</div>
+        ) : (
+          <TokensTable rows={analytics?.tokens ?? []} range={range} />
+        )
+      )}
+      {tab === "Pools" && (
+        analyticsLoading ? (
+          <div className="p-8 text-center text-sm text-muted-foreground animate-pulse">Loading live pools data...</div>
+        ) : (
+          <PoolsTable rows={analytics?.pools ?? []} range={range} />
+        )
+      )}
+      {tab === "Transactions" && (
+        analyticsLoading ? (
+          <div className="p-8 text-center text-sm text-muted-foreground animate-pulse">Loading live transaction logs...</div>
+        ) : (
+          <TxTable rows={analytics?.transactions ?? []} />
+        )
+      )}
       {tab === "Wallet Explorer" && (
         <div className="space-y-8">
           {/* Search Bar */}
@@ -440,17 +1031,17 @@ export default function ExplorePage() {
               placeholder="Search address (0x...)"
               value={addressInput}
               onChange={(e) => setAddressInput(e.target.value)}
-              className={`flex-1 rounded-xl px-4 py-4 outline-none transition ring-1 text-base font-mono
-                ${isDark 
-                  ? "bg-slate-900 border-slate-700 ring-slate-700/50 text-slate-100 placeholder:text-slate-500 focus:ring-cyan-500/40" 
+              className={`flex-1 rounded-xl px-4 py-3.5 outline-none transition ring-1 text-sm font-mono
+                ${isDark
+                  ? "bg-slate-900 border-slate-700 ring-slate-700/50 text-slate-100 placeholder:text-slate-500 focus:ring-cyan-500/40"
                   : "bg-white border-slate-200 ring-slate-200 text-slate-950 placeholder:text-slate-400 focus:ring-cyan-200"}`}
             />
             <button
-              className={`rounded-xl px-6 py-4 font-bold uppercase tracking-wider text-sm text-white transition-all active:scale-[0.98] flex items-center gap-2
-                ${isSearching 
-                  ? "bg-slate-500 cursor-not-allowed" 
-                  : isDark 
-                    ? "bg-gradient-to-r from-cyan-500 to-indigo-600 shadow-lg shadow-cyan-500/20 hover:brightness-110" 
+              className={`rounded-xl px-6 py-3.5 font-bold uppercase tracking-wider text-xs text-white transition-all active:scale-[0.98] flex items-center gap-2
+                ${isSearching
+                  ? "bg-slate-500 cursor-not-allowed"
+                  : isDark
+                    ? "bg-gradient-to-r from-cyan-500 to-indigo-600 shadow-lg shadow-cyan-500/20 hover:brightness-110"
                     : "bg-gradient-to-r from-cyan-500 to-indigo-600 shadow-lg shadow-cyan-500/10 hover:brightness-110"
                 }`}
               onClick={handleExplore}
@@ -462,7 +1053,7 @@ export default function ExplorePage() {
           </div>
 
           {errorMsg && (
-            <p className="text-sm text-rose-400 font-bold font-mono">{errorMsg}</p>
+            <p className="text-xs text-rose-400 font-bold font-mono">{errorMsg}</p>
           )}
 
           {/* Results display */}
@@ -476,21 +1067,21 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-base uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
-                  <Database size={15} />
+                  <Database size={14} />
                   Asset Holdings
                 </h3>
 
                 <div className="space-y-3">
                   {tokenBalances.map((token) => (
-                    <div key={token.symbol} className={`p-3.5 rounded-xl border flex justify-between items-center text-sm
+                    <div key={token.symbol} className={`p-3.5 rounded-xl border flex justify-between items-center text-xs
                       ${isDark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-50/50"}`}
                     >
                       <div>
                         <div className="font-bold">{token.symbol}</div>
-                        <div className="text-xs text-muted-foreground font-light">{token.name}</div>
+                        <div className="text-[10px] text-muted-foreground font-light">{token.name}</div>
                       </div>
                       <div className="font-mono font-semibold">
                         {Number(token.balance).toFixed(4)}
@@ -504,33 +1095,33 @@ export default function ExplorePage() {
               <div className={`p-5 rounded-3xl border shadow-deep backdrop-blur-2xl space-y-4
                 ${isDark ? "border-slate-700/70 bg-slate-950/85 text-white" : "border-slate-200/80 bg-white/90 text-zinc-950"}`}
               >
-                <h3 className={`text-base uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
+                <h3 className={`text-sm uppercase font-display font-bold tracking-wider flex items-center gap-1.5 border-b pb-3
                   ${isDark ? "border-slate-800 text-cyan-400" : "border-slate-200 text-cyan-600"}`}
                 >
-                  <ListCollapse size={15} />
+                  <ListCollapse size={14} />
                   Historical Transaction Log
                 </h3>
 
                 <div className="space-y-4">
                   {txHistory.map((tx) => (
-                    <div key={tx.hash} className={`p-4 rounded-xl border space-y-2 text-sm
+                    <div key={tx.hash} className={`p-4 rounded-xl border space-y-2 text-xs
                       ${isDark ? "border-slate-800 bg-slate-900/50" : "border-slate-200 bg-slate-50/50"}`}
                     >
                       <div className="flex justify-between items-center">
                         <span className="font-bold">{tx.method}</span>
-                        <span className="text-xs text-muted-foreground font-mono">{tx.time}</span>
+                        <span className="text-[10px] text-muted-foreground font-mono">{tx.time}</span>
                       </div>
-                      <div className="text-xs text-zinc-400 font-mono flex justify-between items-center gap-4">
+                      <div className="text-[11px] text-zinc-400 font-mono flex justify-between items-center gap-4">
                         <span>{tx.details}</span>
                         <a
                           href={`https://testnet.mstscan.com/tx/${tx.hash}`}
                           target="_blank"
                           rel="noreferrer"
-                          className={`hover:underline flex items-center gap-1 leading-none font-sans font-bold text-xs
+                          className={`hover:underline flex items-center gap-1 leading-none font-sans font-bold text-[10px]
                             ${isDark ? "text-cyan-300" : "text-cyan-600"}`}
                         >
                           MSTScan
-                          <ExternalLink size={11} />
+                          <ExternalLink size={10} />
                         </a>
                       </div>
                     </div>
@@ -581,10 +1172,12 @@ function Hero({ label, value, delta }: { label: string; value: string; delta: nu
   );
 }
 
-function TokensTable({ data }: { data: any[] }) {
-  const rows = data;
+function TokensTable({ rows, range }: { rows: any[]; range: string }) {
+  const changeHeader = range === "1H" ? "1h Change" : range === "1W" ? "7d Change" : range === "1M" ? "30d Change" : "24h Change";
+  const volumeHeader = range === "1H" ? "1h Volume" : range === "1W" ? "7d Volume" : range === "1M" ? "30d Volume" : "24h Volume";
+
   return (
-    <ExploreTable head={["#", "Token", "Price", "24h Change", "24h Volume", "TVL"]}>
+    <ExploreTable head={["#", "Token", "Price", changeHeader, volumeHeader, "TVL"]}>
       {rows.map((t, i) => (
         <tr key={t.address} className="hover:bg-cyan-500/5 transition-colors">
           <Td className="font-mono text-muted-foreground">{i + 1}</Td>
@@ -609,10 +1202,11 @@ function TokensTable({ data }: { data: any[] }) {
   );
 }
 
-function PoolsTable({ data }: { data: any[] }) {
-  const rows = data;
+function PoolsTable({ rows, range }: { rows: any[]; range: string }) {
+  const volumeHeader = range === "1H" ? "Volume 1h" : range === "1W" ? "Volume 7d" : range === "1M" ? "Volume 30d" : "Volume 24h";
+
   return (
-    <ExploreTable head={["#", "Pool", "Fee tier", "TVL", "Volume 24h", "APR"]}>
+    <ExploreTable head={["#", "Pool", "Protocol", "Fee tier", "TVL", volumeHeader, "APR"]}>
       {rows.map((p, i) => (
         <tr key={p.address} className="hover:bg-cyan-500/5 transition-colors">
           <Td className="font-mono text-muted-foreground">{i + 1}</Td>
@@ -625,6 +1219,7 @@ function PoolsTable({ data }: { data: any[] }) {
               <span className="font-bold group-hover:text-cyan-400 transition-colors">{p.token0} / {p.token1}</span>
             </Link>
           </Td>
+          <Td className="font-semibold text-zinc-300 uppercase font-mono text-xs">{p.protocol}</Td>
           <Td className="font-semibold">
             <span className="rounded-lg border border-border bg-surface/30 px-2.5 py-1 text-xs">
               {(p.feeTier / 10000).toFixed(2)}%
@@ -639,15 +1234,14 @@ function PoolsTable({ data }: { data: any[] }) {
   );
 }
 
-function TxTable({ data }: { data: any[] }) {
-  const rows = data;
+function TxTable({ rows }: { rows: any[] }) {
   const { theme } = useThemeStore();
   const isDark = theme === "dark";
 
   return (
-    <ExploreTable head={["Type", "Pair", "USD Amount", "Account", "Time"]}>
+    <ExploreTable head={["Type", "Pair", "Amount (In ➜ Out)", "USD Amount", "Account", "Time"]}>
       {rows.map((t) => (
-        <tr key={t.hash} className="hover:bg-cyan-500/5 transition-colors">
+        <tr key={`${t.hash}-${t.type}-${t.timestamp}`} className="hover:bg-cyan-500/5 transition-colors">
           <Td>
             <span
               className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider border
@@ -655,7 +1249,11 @@ function TxTable({ data }: { data: any[] }) {
                   ? isDark ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-400" : "bg-cyan-500/15 border-cyan-500/20 text-cyan-700"
                   : t.type === "add"
                     ? isDark ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-emerald-500/15 border-emerald-500/20 text-emerald-700"
-                    : isDark ? "bg-rose-500/10 border-rose-500/30 text-rose-400" : "bg-rose-500/15 border-rose-500/20 text-rose-700"
+                    : t.type === "wrap"
+                      ? isDark ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-400" : "bg-indigo-500/15 border-indigo-500/20 text-indigo-700"
+                      : t.type === "unwrap"
+                        ? isDark ? "bg-amber-500/10 border-amber-500/30 text-amber-400" : "bg-amber-500/15 border-amber-500/20 text-amber-700"
+                        : isDark ? "bg-rose-500/10 border-rose-500/30 text-rose-400" : "bg-rose-500/15 border-rose-500/20 text-rose-700"
                 }`}
             >
               {t.type}
@@ -665,6 +1263,15 @@ function TxTable({ data }: { data: any[] }) {
             <a href={`https://testnet.mstscan.com/tx/${t.hash}`} target="_blank" rel="noreferrer" className="font-bold hover:text-cyan-400 transition-colors">
               {t.token0} → {t.token1}
             </a>
+          </Td>
+          <Td className="font-mono text-xs text-zinc-300">
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold">{fmtNumber(t.amountIn, { max: 4 })}</span>
+              <span className="text-zinc-500 font-light">{t.token0}</span>
+              <span className="text-cyan-500/60 font-light">➜</span>
+              <span className="font-bold">{fmtNumber(t.amountOut, { max: 4 })}</span>
+              <span className="text-zinc-500 font-light">{t.token1}</span>
+            </div>
           </Td>
           <Td className="font-mono font-semibold">{fmtUsd(t.usd)}</Td>
           <Td className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors">

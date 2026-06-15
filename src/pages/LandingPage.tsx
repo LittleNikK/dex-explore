@@ -7,8 +7,13 @@ import Testimonials from "../components/landing/Testimonials";
 import FAQ from "../components/landing/FAQ";
 import CTA from "../components/landing/CTA";
 import Footer from "../components/landing/Footer";
+import DexBackground from "../components/landing/background";
+import { useThemeStore } from "../store/themeStore";
 
 export default function LandingPage() {
+  const { theme } = useThemeStore();
+  const isDark = theme === "dark";
+
   // Sync page metadata titles for SEO and premium feel
   useEffect(() => {
     const originalTitle = document.title;
@@ -23,7 +28,12 @@ export default function LandingPage() {
   }, []);
 
   return (
-    <div className="w-full flex flex-col min-h-screen">
+    <div className={`w-full flex flex-col min-h-screen transition-colors duration-300 relative ${
+      isDark ? "bg-zinc-950 text-white" : "bg-white text-zinc-900"
+    }`}>
+      {/* Interactive Network Particle Background */}
+      <DexBackground />
+
       {/* Sticky Scroll Navigation Header */}
       <Navbar />
 

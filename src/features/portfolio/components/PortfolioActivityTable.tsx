@@ -18,7 +18,7 @@ import {
   formatPortfolioTime,
   formatActivityUsd,
 } from "../utils/portfolio-format";
-import { displayTokenSymbol } from "@/config/contracts";
+import { displayTokenSymbol } from "@/config";
 import type { PortfolioActivity, PortfolioActivityType } from "../types";
 
 const PAGE_SIZE = 6;

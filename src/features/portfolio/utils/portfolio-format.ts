@@ -14,24 +14,15 @@ export function formatPortfolioUsd(value: number, compact = false) {
 }
 
 export function formatAssetUsd(symbol: string, value: number, compact = false) {
-  if (symbol.toUpperCase() === "USDC") {
-    return fmtUsd(value, { compact });
-  }
-  return fmtNumber(value, { compact, max: 2 });
+  return fmtUsd(value, { compact });
 }
 
 export function formatAssetPrice(symbol: string, value: number) {
-  if (symbol.toUpperCase() === "USDC") {
-    return fmtUsd(value, { compact: false });
-  }
-  return fmtNumber(value, { compact: false, max: 4 });
+  return fmtUsd(value, { compact: false });
 }
 
 export function formatActivityUsd(assetLabel: string, amountUsd: number) {
-  if (assetLabel.toUpperCase().includes("USDC")) {
-    return fmtUsd(amountUsd, { compact: false });
-  }
-  return fmtNumber(amountUsd, { compact: false, max: 2 });
+  return fmtUsd(amountUsd, { compact: false });
 }
 
 

@@ -30,6 +30,8 @@ export interface Portfolio {
   change24h: number;
   networkCount: number;
   assetCount: number;
+  isNativeBalance?: boolean;
+  nativeSymbol?: string;
   stats: PortfolioStats;
 }
 
@@ -70,6 +72,9 @@ export interface PortfolioPosition {
   feesEarnedUsd: number;
   status: PortfolioPositionStatus;
   hash: string;
+  reserves?: {
+    [symbol: string]: number;
+  };
 }
 
 export interface PortfolioChartPoint {

@@ -68,11 +68,15 @@ export function PortfolioHeader({ portfolio, ensName, walletAddress, isLoading, 
 
         <div className="grid gap-3 rounded-[1.75rem] border border-white/60 bg-surface/70 p-4 shadow-soft sm:grid-cols-2">
           <div className="space-y-2">
-            <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
+            <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">value</div>
             {isLoading ? (
               <Skeleton className="h-10 w-40 rounded-2xl" />
             ) : (
-              <div className="text-4xl font-semibold tracking-tight">{formatPortfolioUsd(portfolio?.valueUsd ?? 0)}</div>
+              <div className="text-3xl font-semibold tracking-tight">
+                {portfolio?.isNativeBalance
+                  ? `${(portfolio?.valueUsd ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${portfolio.nativeSymbol ?? "MST"}`
+                  : formatPortfolioUsd(portfolio?.valueUsd ?? 0)}
+              </div>
             )}
             <div className={`text-sm font-medium ${portfolio && portfolio.change24h >= 0 ? "text-success" : "text-destructive"}`}>
               {isLoading ? <Skeleton className="h-4 w-24 rounded-full" /> : formatPortfolioPct(portfolio?.change24h ?? 0)}

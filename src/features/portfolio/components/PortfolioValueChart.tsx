@@ -23,6 +23,8 @@ interface PortfolioValueChartProps {
   isError?: boolean;
   error?: string | null;
   valueUsd?: number;
+  isNativeBalance?: boolean;
+  nativeSymbol?: string;
 }
 
 export function PortfolioValueChart({
@@ -33,6 +35,8 @@ export function PortfolioValueChart({
   isError,
   error,
   valueUsd,
+  isNativeBalance,
+  nativeSymbol,
 }: PortfolioValueChartProps) {
   const chartData = useMemo(() => {
     return data.map((point) => {
@@ -48,12 +52,19 @@ export function PortfolioValueChart({
   }, [data, selectedTimeframe]);
   const latest = chartData.at(-1)?.value ?? valueUsd ?? 0;
 
+  const formatValue = (val: number, compact = false) => {
+    if (isNativeBalance) {
+      return `${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${nativeSymbol ?? "MST"}`;
+    }
+    return formatPortfolioUsd(val, compact);
+  };
+
   return (
     <Card className="glass overflow-hidden rounded-[2rem] border-white/60 shadow-float">
       <CardHeader className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
         <div>
-          <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
-          {isLoading ? <Skeleton className="mt-2 h-8 w-40 rounded-2xl" /> : <div className="mt-2 text-4xl font-semibold tracking-tight">{formatPortfolioUsd(latest)}</div>}
+          <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Portfolio value</div>
+          {isLoading ? <Skeleton className="mt-2 h-8 w-40 rounded-2xl" /> : <div className="mt-2 text-3xl font-semibold tracking-tight">{formatValue(latest)}</div>}
         </div>
 
         <div className="flex flex-wrap gap-2 rounded-full border border-border/70 bg-surface/80 p-1">
@@ -95,8 +106,8 @@ export function PortfolioValueChart({
                 </defs>
                 <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={12} minTickGap={32} />
-                <YAxis tickLine={false} axisLine={false} width={56} tickFormatter={(value: number) => formatPortfolioUsd(value, true)} />
-                <Tooltip content={<ChartTooltip />} />
+                <YAxis tickLine={false} axisLine={false} width={80} tickFormatter={(value: number) => formatValue(value, true)} />
+                <Tooltip content={<ChartTooltip isNativeBalance={isNativeBalance} nativeSymbol={nativeSymbol} />} />
                 <Area
                   type="monotone"
                   dataKey="value"
@@ -115,13 +126,28 @@ export function PortfolioValueChart({
   );
 }
 
-function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value?: number }>; label?: string }) {
+function ChartTooltip({
+  active,
+  payload,
+  label,
+  isNativeBalance,
+  nativeSymbol,
+}: {
+  active?: boolean;
+  payload?: Array<{ value?: number }>;
+  label?: string;
+  isNativeBalance?: boolean;
+  nativeSymbol?: string;
+}) {
   if (!active || !payload || !payload.length) return null;
   const value = payload[0]?.value ?? 0;
+  const displayVal = isNativeBalance
+    ? `${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${nativeSymbol ?? "MST"}`
+    : formatPortfolioUsd(value);
   return (
     <div className="rounded-2xl border border-border/70 bg-background/95 px-4 py-3 shadow-deep backdrop-blur-xl">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-base font-semibold">{formatPortfolioUsd(value)}</div>
+      <div className="mt-1 text-base font-semibold">{displayVal}</div>
     </div>
   );
 }

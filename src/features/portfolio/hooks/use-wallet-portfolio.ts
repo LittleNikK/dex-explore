@@ -1,19 +1,24 @@
-import { useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
-import { type Address } from "viem";
+import { type Address, createPublicClient, http } from "viem";
 import { getWalletPortfolioSnapshot } from "../services/wallet-portfolio.service";
 import { usePortfolioStore } from "../store/portfolio-store";
+import { mstChain } from "@/config/chains";
 import type { PortfolioChartPoint } from "../types";
-import { usePriceWs } from "@/hooks/usePriceWs";
 
 export function useWalletPortfolio(address?: string, chainId?: number, enabled = false) {
-  const publicClient = usePublicClient({ chainId });
-  const queryClient = useQueryClient();
+  const currentPublicClient = usePublicClient({ chainId });
 
-  usePriceWs(() => {
-    queryClient.invalidateQueries({ queryKey: ["wallet-portfolio"] });
-  });
+  // Use the dedicated direct HTTP public client for the MST testnet to query logs and data reliably,
+  // bypassing any injected MetaMask provider rate limits or block range restrictions.
+  const publicClient = useMemo(() => {
+    return createPublicClient({
+      chain: mstChain,
+      transport: http("https://testnetrpc.mstblockchain.com"),
+    });
+  }, []);
+
   const refreshToken = usePortfolioStore((state) => state.refreshToken);
   const resetPortfolioState = usePortfolioStore((state) => state.resetPortfolioState);
   const setPortfolio = usePortfolioStore((state) => state.setPortfolio);
@@ -32,15 +37,17 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
   }, [address, chainId, enabled, resetPortfolioState]);
 
   const query = useQuery({
-    queryKey: ["wallet-portfolio", address ?? "default", chainId ?? 1, refreshToken],
-    enabled: enabled && Boolean(address) && Boolean(chainId) && Boolean(publicClient),
-    staleTime: 10000,
+    queryKey: ["wallet-portfolio", address ?? "default", chainId ?? 91562037, refreshToken],
+    enabled: enabled && Boolean(address) && Boolean(publicClient),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
     gcTime: 5 * 60 * 1000,
     queryFn: async () => {
-      if (!publicClient || !address || !chainId) return null;
+      if (!publicClient || !address) return null;
+      const targetChainId = chainId === 91562037 ? chainId : 91562037;
       return getWalletPortfolioSnapshot({
         address: address as Address,
-        chainId,
+        chainId: targetChainId,
         publicClient: publicClient as never,
       });
     },
@@ -74,10 +81,11 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
         portfolioChange24h: change24h,
       },
     });
+    const totalAssetsValue = current.assets.reduce((sum, a) => sum + a.valueUsd, 0);
     setAssets(
       current.assets.map((asset) => ({
         ...asset,
-        allocation: current.portfolio.valueUsd > 0 ? (asset.valueUsd / current.portfolio.valueUsd) * 100 : 0,
+        allocation: totalAssetsValue > 0 ? (asset.valueUsd / totalAssetsValue) * 100 : 0,
       })),
     );
     setActivity(current.activity);

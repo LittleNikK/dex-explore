@@ -32,6 +32,7 @@ export interface CreatePoolDto {
   token1Decimals: number;
   token0InitialAmount: string;
   token1InitialAmount: string;
+  protocol?: string;
 }
 
 export interface Swap {

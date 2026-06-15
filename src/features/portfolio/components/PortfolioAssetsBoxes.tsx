@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { formatAssetUsd, formatPortfolioPct } from "../utils/portfolio-format";
-import { displayTokenSymbol } from "@/config/contracts";
+import { displayTokenSymbol } from "@/config";
 import type { PortfolioAsset } from "../types";
 
 interface PortfolioAssetsBoxesProps {
@@ -26,7 +26,12 @@ export function PortfolioAssetsBoxes({ assets }: PortfolioAssetsBoxesProps) {
                   <div className="text-xs text-muted-foreground mt-0.5">{asset.name}</div>
                 </div>
                 <div className="text-right">
-                  <div className="font-bold text-sm">{formatAssetUsd(asset.symbol, asset.valueUsd)}</div>
+                  <div className="font-bold text-base">
+                    {asset.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-0.5">
+                    {asset.valueUsd.toLocaleString(undefined, { style: "currency", currency: "USD" })}
+                  </div>
                 </div>
               </div>
               

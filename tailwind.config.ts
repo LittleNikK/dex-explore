@@ -28,9 +28,9 @@ export default {
         }
       },
       fontFamily: {
-        sans: ["'Inter'", "'Plus Jakarta Sans'", "sans-serif"],
-        display: ["'Space Grotesk'", "sans-serif"],
-        mono: ["'JetBrains Mono'", "monospace"],
+        sans: ["Inter", "sans-serif"],
+        display: ["Space Grotesk", "sans-serif"],
+        mono: ["JetBrains Mono", "monospace"],
       },
       animation: {
         "pulse-slow": "pulse 8s cubic-bezier(0.4, 0, 0.6, 1) infinite",

@@ -1,5 +1,4 @@
 import { formatUnits, parseUnits, type Address, type PublicClient } from "viem";
-import { ERC20_ABI } from "@/config/uniswap";
 import { TOKENS, tokensForChain, type Token } from "@/config/tokens";
 import type {
   Portfolio,
@@ -10,28 +9,78 @@ import type {
   PortfolioPosition,
 } from "../types";
 import { SUPPORTED_CHAINS } from "@/config/wagmi";
-import { CONTRACTS, quoterV2Abi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi } from "@/config/contracts";
-import { mstChain } from "@/config/chains";
-import { getAmountsForLiquidity } from "@/utils/uniswap-math";
-import { fetchUserSwapsFromSubgraph } from "./subgraph.service";
+import { getContractAddress, ABIS, erc20Abi, nonfungiblePositionManagerAbi, erc20TransferEvent, erc20ApprovalEvent, erc721TransferEvent, V3_FEE, ZERO_SQRT_PRICE_LIMIT } from "@/config";
+import { MOCK_ACTIVITY, MOCK_POSITIONS } from "../mock/portfolio.mock";
 
-const poolAbi = [
-  {
-    type: "function",
-    name: "slot0",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [
-      { name: "sqrtPriceX96", type: "uint160" },
-      { name: "tick", type: "int24" },
-      { name: "observationIndex", type: "uint16" },
-      { name: "observationCardinality", type: "uint16" },
-      { name: "observationCardinalityNext", type: "uint16" },
-      { name: "feeProtocol", type: "uint8" },
-      { name: "unlocked", type: "bool" }
-    ]
+const txCache = new Map<string, any>();
+const blockCache = new Map<bigint, any>();
+const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
+
+async function getTokenMeta(publicClient: PublicClient, addr: string): Promise<{ symbol: string; decimals: number }> {
+  const lowerAddr = addr.toLowerCase();
+  const existing = TOKENS.find(t => t.symbol === "MST" ? false : t.address?.toLowerCase() === lowerAddr);
+  if (existing) {
+    return { symbol: existing.symbol, decimals: existing.decimals };
   }
-] as const;
+  if (tokenMetaCache.has(lowerAddr)) {
+    return tokenMetaCache.get(lowerAddr)!;
+  }
+  try {
+    const [symbol, decimals] = await Promise.all([
+      publicClient.readContract({
+        address: addr as Address,
+        abi: ABIS.erc20,
+        functionName: "symbol"
+      }),
+      publicClient.readContract({
+        address: addr as Address,
+        abi: ABIS.erc20,
+        functionName: "decimals"
+      })
+    ]);
+    const meta = { symbol: symbol as string, decimals: Number(decimals) };
+    tokenMetaCache.set(lowerAddr, meta);
+    return meta;
+  } catch (err) {
+    console.error(`Error fetching meta for token ${addr}:`, err);
+    const fallback = { symbol: "ERC20", decimals: 18 };
+    tokenMetaCache.set(lowerAddr, fallback);
+    return fallback;
+  }
+}
+
+function getSqrtRatioAtTick(tick: number): number {
+  return Math.pow(1.0001, tick / 2);
+}
+
+function getAmountsForLiquidity(
+  sqrtPriceX96: bigint,
+  tick: number,
+  tickLower: number,
+  tickUpper: number,
+  liquidity: bigint
+) {
+  const sqrtP = Number(sqrtPriceX96) / Math.pow(2, 96);
+  const sqrtPLower = getSqrtRatioAtTick(tickLower);
+  const sqrtPUpper = getSqrtRatioAtTick(tickUpper);
+  const L = Number(liquidity);
+
+  let amount0 = 0;
+  let amount1 = 0;
+
+  if (tick < tickLower) {
+    amount0 = L * (1 / sqrtPLower - 1 / sqrtPUpper);
+    amount1 = 0;
+  } else if (tick < tickUpper) {
+    amount0 = L * (1 / sqrtP - 1 / sqrtPUpper);
+    amount1 = L * (sqrtP - sqrtPLower);
+  } else {
+    amount0 = 0;
+    amount1 = L * (sqrtPUpper - sqrtPLower);
+  }
+
+  return { amount0, amount1 };
+}
 
 const CHAIN_NATIVE_SYMBOL: Record<number, string> = {
   1: "ETH",
@@ -47,12 +96,18 @@ function tokenPrice(symbol: string) {
   return token?.priceUsd ?? 0;
 }
 
+function fallbackMstPrice() {
+  const token = TOKENS.find((entry) => entry.symbol === "WMST" || entry.symbol === "MST");
+  return token?.priceUsd || 1.85;
+}
+
 function chainLabel(chainId: number) {
   return SUPPORTED_CHAINS.find((chain) => chain.id === chainId)?.name ?? "Network";
 }
 
 function nativeTokenForChain(chainId: number): Token | null {
-  const symbol = CHAIN_NATIVE_SYMBOL[chainId] ?? "ETH";
+  const targetChainId = CHAIN_NATIVE_SYMBOL[chainId] ? chainId : 91562037;
+  const symbol = CHAIN_NATIVE_SYMBOL[targetChainId] ?? "MST";
   return TOKENS.find((token) => token.symbol === symbol) ?? null;
 }
 
@@ -66,6 +121,7 @@ export interface WalletPortfolioSnapshot {
   activity: PortfolioActivity[];
   positions: PortfolioPosition[];
   chartPoint: PortfolioChartPoint;
+  balanceHistory?: Array<{ timestamp: number; balances: Record<string, number> }>;
 }
 
 export async function getWalletPortfolioSnapshot({
@@ -77,49 +133,99 @@ export async function getWalletPortfolioSnapshot({
   chainId: number;
   publicClient: PublicClient;
 }): Promise<WalletPortfolioSnapshot> {
-  // Fetch live MST price from pool dynamically
-  let liveMstPrice = 0.5; // Default fallback price of $0.50 for tMST
+  const targetChainId = CHAIN_NATIVE_SYMBOL[chainId] ? chainId : 91562037;
+  // Fetch live MST price from pool slot0 primarily, fallback to quoter simulation
+  let liveMstPrice = 0;
+  let poolSqrtPriceX96 = 0n;
+  let poolTick = 0;
   try {
-    const wmstAddress = CONTRACTS.wmst;
-    const usdcAddress = CONTRACTS.usdc;
-    if (wmstAddress && usdcAddress) {
-      const oneUnitRaw = parseUnits("1", 18);
-      const { result } = await publicClient.simulateContract({
-        address: CONTRACTS.quoterV2,
-        abi: quoterV2Abi,
-        functionName: "quoteExactInputSingle",
-        args: [
-          {
-            tokenIn: wmstAddress,
-            tokenOut: usdcAddress,
-            amountIn: oneUnitRaw,
-            fee: V3_FEE,
-            sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-          }
-        ]
+    const lpStateStorage = getContractAddress("lpStateStorage", targetChainId);
+    const poolAddress = lpStateStorage ?
+      (await publicClient.readContract({
+        address: lpStateStorage,
+        abi: ABIS.lpStateStorage,
+        functionName: "poolAddress"
+      }).catch(() => null)) : null;
+
+    const targetPool = poolAddress || getContractAddress("pool", targetChainId);
+    if (targetPool) {
+      const slot0 = await publicClient.readContract({
+        address: targetPool as Address,
+        abi: ABIS.pool,
+        functionName: "slot0"
       });
 
-      if (result) {
-        liveMstPrice = Number(formatUnits(result[0], 18));
+      if (slot0 && slot0[0] > 0n) {
+        poolSqrtPriceX96 = BigInt(slot0[0]);
+        poolTick = Number(slot0[1]);
+        const Q96 = 2n ** 96n;
+        const priceOfUsdcInWmst = (Number(poolSqrtPriceX96) / Number(Q96)) ** 2;
+        if (priceOfUsdcInWmst > 0) {
+          liveMstPrice = 1 / priceOfUsdcInWmst;
+        }
       }
     }
   } catch (err) {
-    console.error("Error fetching live MST price in portfolio service", err);
-  }
-  if (liveMstPrice <= 0) {
-    liveMstPrice = 0.5; // Fallback nominal price
+    console.error("Error reading spot price from pool slot0 in portfolio service", err);
   }
 
-  const portfolioTokens = tokensForChain(chainId);
-  
-  // Fetch native and ERC20 balances in parallel
-  const [nativeBalance, tokenBalances] = await Promise.all([
-    publicClient.getBalance({ address }),
+  // Fallback to QuoterV2 if slot0 fails or returns 0
+  if (liveMstPrice <= 0) {
+    try {
+      const wmstAddress = getContractAddress("wmst", targetChainId);
+      const usdcAddress = getContractAddress("usdc", targetChainId);
+      if (wmstAddress && usdcAddress) {
+        const oneUnitRaw = parseUnits("1", 18);
+        const { result } = await publicClient.simulateContract({
+          address: getContractAddress("quoterV2", targetChainId),
+          abi: ABIS.quoterV2,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wmstAddress,
+              tokenOut: usdcAddress,
+              amountIn: oneUnitRaw,
+              fee: V3_FEE,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+
+        if (result) {
+          liveMstPrice = Number(formatUnits(result[0], 18));
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching live MST price via quoter in portfolio service", err);
+    }
+  }
+
+  if (liveMstPrice <= 0) {
+    liveMstPrice = fallbackMstPrice();
+  }
+
+  if (poolSqrtPriceX96 === 0n) {
+    try {
+      const priceOfUsdcInWmst = 1 / liveMstPrice;
+      const sqrtP = Math.sqrt(priceOfUsdcInWmst);
+      poolSqrtPriceX96 = BigInt(Math.floor(sqrtP * Math.pow(2, 96)));
+      poolTick = Math.floor(Math.log(priceOfUsdcInWmst) / Math.log(1.0001));
+    } catch (err) {
+      console.error("Error calculating pool math fallback:", err);
+    }
+  }
+
+  const portfolioTokens = tokensForChain(targetChainId);
+  const [nativeBalance, tokenBalances, userPositionsData] = await Promise.all([
+    publicClient.getBalance({ address }).catch((err) => {
+      console.error("Error reading native balance in portfolio service:", err);
+      return 0n;
+    }),
     Promise.all(
       portfolioTokens.map(async (token) => {
         try {
           const balance = await publicClient.readContract({
-            abi: ERC20_ABI,
+            abi: ABIS.erc20,
             address: token.address as Address,
             functionName: "balanceOf",
             args: [address],
@@ -131,69 +237,99 @@ export async function getWalletPortfolioSnapshot({
         }
       })
     ),
+    (async () => {
+      try {
+        const positionManager = getContractAddress("positionManager", targetChainId);
+        const [sentLogs, receivedLogs] = await Promise.all([
+          publicClient.getLogs({
+            address: positionManager,
+            event: erc721TransferEvent,
+            args: { from: address },
+            fromBlock: 2200000n,
+            toBlock: "latest"
+          }).catch(() => []),
+          publicClient.getLogs({
+            address: positionManager,
+            event: erc721TransferEvent,
+            args: { to: address },
+            fromBlock: 2200000n,
+            toBlock: "latest"
+          }).catch(() => [])
+        ]);
+
+        const ownedTokenIds = new Set<string>();
+        for (const log of [...sentLogs, ...receivedLogs]) {
+          const { from, to, tokenId } = log.args;
+          if (!tokenId) continue;
+          const tokenIdStr = tokenId.toString();
+          if (to?.toLowerCase() === address.toLowerCase()) {
+            ownedTokenIds.add(tokenIdStr);
+          }
+          if (from?.toLowerCase() === address.toLowerCase()) {
+            ownedTokenIds.delete(tokenIdStr);
+          }
+        }
+
+        const positionDetails = await Promise.all(
+          Array.from(ownedTokenIds).map(async (tokenIdStr) => {
+            try {
+              const tokenId = BigInt(tokenIdStr);
+              const pos = await publicClient.readContract({
+                address: getContractAddress("positionManager", targetChainId),
+                abi: ABIS.positionManager,
+                functionName: "positions",
+                args: [tokenId]
+              });
+              return { tokenIdStr, pos };
+            } catch (err) {
+              console.error(`Error reading position detail for tokenId ${tokenIdStr}:`, err);
+              return null;
+            }
+          })
+        );
+
+        return positionDetails.filter((p): p is { tokenIdStr: string; pos: any } => {
+          if (!p) return false;
+          const { pos } = p;
+          if (!pos || pos[7] === 0n) return false; // liquidity is at index 7
+
+          const token0 = pos[2];
+          const token1 = pos[3];
+          const isWmstUsdc = (
+            (token0.toLowerCase() === getContractAddress("usdc", targetChainId).toLowerCase() && token1.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase()) ||
+            (token0.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase() && token1.toLowerCase() === getContractAddress("usdc", targetChainId).toLowerCase())
+          );
+          return isWmstUsdc;
+        });
+      } catch (err) {
+        console.error("Error fetching user LP positions in portfolio service:", err);
+        return [];
+      }
+    })()
   ]);
 
-  // Fetch dynamic positions from NonfungiblePositionManager directly
-  let npmBalance = 0n;
-  try {
-    npmBalance = await publicClient.readContract({
-      address: CONTRACTS.positionManager,
-      abi: nonfungiblePositionManagerAbi,
-      functionName: "balanceOf",
-      args: [address]
-    }) as bigint;
-  } catch (err) {
-    console.error("Error fetching NPM balance in portfolio service", err);
-  }
+  const nativeToken = nativeTokenForChain(targetChainId);
+  const nativeAmount = nativeToken ? safeNumber(nativeBalance, nativeToken.decimals) : 0;
+  const nativePrice = nativeToken ? (nativeToken.symbol === "MST" ? liveMstPrice : nativeToken.priceUsd ?? 0) : 0;
+  const nativeValueUsd = nativeToken ? nativeAmount * nativePrice : 0;
 
-  // 1. Fetch all token IDs in parallel
-  const tokenIds = await Promise.all(
-    Array.from({ length: Number(npmBalance) }, (_, i) =>
-      publicClient.readContract({
-        address: CONTRACTS.positionManager,
-        abi: nonfungiblePositionManagerAbi,
-        functionName: "tokenOfOwnerByIndex",
-        args: [address, BigInt(i)]
-      }) as Promise<bigint>
-    )
-  ).catch((err) => {
-    console.error("Error fetching tokenIds in parallel in wallet snapshot", err);
-    return [] as bigint[];
-  });
-
-  const activePositionsRaw = await Promise.all(
-    tokenIds.map(async (tokenId) => {
-      try {
-        const positionInfo = await publicClient.readContract({
-          address: CONTRACTS.positionManager,
-          abi: nonfungiblePositionManagerAbi,
-          functionName: "positions",
-          args: [tokenId]
-        });
-        return { tokenId, positionInfo };
-      } catch (err) {
-        console.error(`Error fetching positions info for token ${tokenId}`, err);
-        return null;
-      }
-    })
-  ).then(res => res.filter((x): x is NonNullable<typeof x> => x !== null));
-
-  const nativeToken = nativeTokenForChain(chainId);
-  const nativePrice = nativeToken ? (nativeToken.symbol === "MST" || nativeToken.symbol === "tMST" ? liveMstPrice : nativeToken.priceUsd ?? 0) : 0;
-  const nativeValueUsd = nativeToken ? safeNumber(nativeBalance, nativeToken.decimals) * nativePrice : 0;
+  const wmstToken = portfolioTokens.find((t) => t.symbol === "WMST");
+  const wmstBalanceIndex = portfolioTokens.findIndex((t) => t.symbol === "WMST");
+  const wmstRaw = wmstBalanceIndex >= 0 ? (tokenBalances[wmstBalanceIndex] as { result?: unknown } | undefined) : undefined;
+  const wmstBalanceRaw = typeof wmstRaw?.result === "bigint" ? wmstRaw.result : 0n;
+  const wmstAmount = wmstToken ? safeNumber(wmstBalanceRaw, wmstToken.decimals) : 0;
 
   const assets: PortfolioAsset[] = [];
 
   if (nativeToken) {
-    const balance = safeNumber(nativeBalance, nativeToken.decimals);
     assets.push({
-      id: `native-${chainId}`,
+      id: `native-${targetChainId}`,
       symbol: nativeToken.symbol,
       name: nativeToken.name,
-      network: chainLabel(chainId),
-      chainId,
+      network: chainLabel(targetChainId),
+      chainId: targetChainId,
       priceUsd: nativePrice,
-      balance,
+      balance: nativeAmount,
       valueUsd: nativeValueUsd,
       change24h: 0,
       allocation: 0,
@@ -213,8 +349,8 @@ export async function getWalletPortfolioSnapshot({
       id: token.symbol.toLowerCase(),
       symbol: token.symbol,
       name: token.name,
-      network: chainLabel(chainId),
-      chainId,
+      network: chainLabel(targetChainId),
+      chainId: targetChainId,
       priceUsd: tokenPriceValue,
       balance: amount,
       valueUsd,
@@ -224,376 +360,436 @@ export async function getWalletPortfolioSnapshot({
     });
   });
 
-  // 2. Fetch all position details and reserves concurrently in parallel
-  const positionsAndLp = await Promise.all(
-    activePositionsRaw.map(async ({ tokenId, positionInfo }) => {
-      const token0Address = positionInfo[2] as Address;
-      const token1Address = positionInfo[3] as Address;
-      const fee = positionInfo[4] as number;
-      const tickLower = positionInfo[5] as number;
-      const tickUpper = positionInfo[6] as number;
-      const lpLiquidity = positionInfo[7] as bigint;
-      const tokensOwed0 = positionInfo[10] as bigint;
-      const tokensOwed1 = positionInfo[11] as bigint;
+  const positions: PortfolioPosition[] = [];
 
-      // Resolve poolAddress via factory
-      let poolAddress = "0x0000000000000000000000000000000000000000";
-      try {
-        poolAddress = await publicClient.readContract({
-          address: CONTRACTS.factory,
-          abi: uniswapV3FactoryAbi,
-          functionName: "getPool",
-          args: [token0Address, token1Address, fee]
-        }) as string;
-      } catch (err) {
-        console.error("Error fetching pool address from factory in portfolio service", err);
-      }
+  userPositionsData.forEach(({ tokenIdStr, pos }) => {
+    const token0 = pos[2];
+    const token1 = pos[3];
+    const tickLower = Number(pos[5]);
+    const tickUpper = Number(pos[6]);
+    const liquidity = BigInt(pos[7]);
 
-      const wmstToken = TOKENS.find((token) => token.symbol === "WMST") || { symbol: "WMST", decimals: 18, address: CONTRACTS.wmst };
-      const usdcToken = TOKENS.find((token) => token.symbol === "USDC") || { symbol: "USDC", decimals: 18, address: CONTRACTS.usdc };
+    const { amount0, amount1 } = getAmountsForLiquidity(
+      poolSqrtPriceX96,
+      poolTick,
+      tickLower,
+      tickUpper,
+      liquidity
+    );
 
-      const match0 = TOKENS.find((token) => token.address?.toLowerCase() === token0Address.toLowerCase());
-      const token0Info = match0 || (token0Address.toLowerCase() === CONTRACTS.usdc?.toLowerCase() ? usdcToken : { symbol: "USDC", decimals: 18, address: token0Address });
+    let usdcReserve = 0;
+    let wmstReserve = 0;
 
-      const match1 = TOKENS.find((token) => token.address?.toLowerCase() === token1Address.toLowerCase());
-      const token1Info = match1 || (token1Address.toLowerCase() === CONTRACTS.wmst?.toLowerCase() ? wmstToken : { symbol: "WMST", decimals: 18, address: token1Address });
-
-      const price0 = token0Info.symbol === "USDC" ? 1.0 : (token0Info.symbol === "WMST" || token0Info.symbol === "MST" || token0Info.symbol === "tMST" ? liveMstPrice : (token0Info as any).priceUsd ?? 0);
-      const price1 = token1Info.symbol === "USDC" ? 1.0 : (token1Info.symbol === "WMST" || token1Info.symbol === "MST" || token1Info.symbol === "tMST" ? liveMstPrice : (token1Info as any).priceUsd ?? 0);
-
-      let finalAmt0 = 0n;
-      let finalAmt1 = 0n;
-
-      if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
-        try {
-          const slot0 = await publicClient.readContract({
-            address: poolAddress as Address,
-            abi: poolAbi,
-            functionName: "slot0"
-          }) as any;
-          const sqrtPriceX96 = slot0[0];
-          const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
-            lpLiquidity,
-            sqrtPriceX96,
-            tickLower,
-            tickUpper
-          );
-          finalAmt0 = calcAmt0;
-          finalAmt1 = calcAmt1;
-        } catch (mathErr) {
-          console.error(`Failed calculating V3 reserves for tokenId ${tokenId}`, mathErr);
-        }
-      }
-
-      const val0 = safeNumber(finalAmt0, token0Info.decimals) * price0;
-      const val1 = safeNumber(finalAmt1, token1Info.decimals) * price1;
-      const liquidityUsd = val0 + val1;
-
-      const fees0 = safeNumber(tokensOwed0, token0Info.decimals) * price0;
-      const fees1 = safeNumber(tokensOwed1, token1Info.decimals) * price1;
-      const feesEarnedUsd = fees0 + fees1;
-
-      // Calculate dynamic APR based on live pool reserves and fee tier
-      let positionApr = 12.4;
-      if (poolAddress && poolAddress !== "0x0000000000000000000000000000000000000000") {
-        try {
-          const [poolBal0, poolBal1] = await Promise.all([
-            publicClient.readContract({
-              address: token0Address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [poolAddress as Address]
-            }),
-            publicClient.readContract({
-              address: token1Address,
-              abi: ERC20_ABI,
-              functionName: "balanceOf",
-              args: [poolAddress as Address]
-            })
-          ]);
-          const poolReserve0 = safeNumber(poolBal0, token0Info.decimals);
-          const poolReserve1 = safeNumber(poolBal1, token1Info.decimals);
-          const poolTvl = poolReserve0 * price0 + poolReserve1 * price1;
-
-          if (poolTvl > 0) {
-            const estimatedDailyVolume = poolTvl * 0.18;
-            positionApr = Number(((estimatedDailyVolume * fee * 365) / (poolTvl * 1000000) * 100).toFixed(2));
-          }
-        } catch (aprErr) {
-          console.error("Error computing dynamic position APR", aprErr);
-        }
-      }
-
-      return {
-        position: {
-          id: tokenId.toString(),
-          pool: `${token0Info.symbol} / ${token1Info.symbol} ${(fee / 10000).toFixed(2)}%`,
-          assets: [token0Info.symbol, token1Info.symbol] as [string, string],
-          network: chainLabel(chainId),
-          liquidityUsd,
-          apr: positionApr,
-          feesEarnedUsd,
-          status: "In Range" as const,
-          hash: poolAddress,
-        },
-        liquidityUsd
-      };
-    })
-  );
-
-  const positions = positionsAndLp.map(x => x.position);
-  const lpValueUsd = positionsAndLp.reduce((sum, x) => sum + x.liquidityUsd, 0);
-
-  // Fetch on-chain transaction activity
-  let activity: PortfolioActivity[] = [];
-  try {
-    console.log(`Querying transaction history from GraphQL Subgraph for ${address}...`);
-    activity = await fetchUserSwapsFromSubgraph(address, chainId);
-  } catch (subgraphErr) {
-    console.warn("GraphQL Subgraph query failed, falling back to direct on-chain logs query", subgraphErr);
-    try {
-      let logs: any[] = [];
-      let approvals: any[] = [];
-      
-      // Fetch logs in parallel
-      const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
-        publicClient.getLogs({
-          address: [CONTRACTS.usdc, CONTRACTS.wmst],
-          event: {
-            type: 'event',
-            name: 'Transfer',
-            inputs: [
-              { type: 'address', name: 'from', indexed: true },
-              { type: 'address', name: 'to', indexed: true },
-              { type: 'uint256', name: 'value' }
-            ]
-          },
-          args: {
-            from: address
-          },
-          fromBlock: 0n
-        }).catch(() => []),
-        publicClient.getLogs({
-          address: [CONTRACTS.usdc, CONTRACTS.wmst],
-          event: {
-            type: 'event',
-            name: 'Transfer',
-            inputs: [
-              { type: 'address', name: 'from', indexed: true },
-              { type: 'address', name: 'to', indexed: true },
-              { type: 'uint256', name: 'value' }
-            ]
-          },
-          args: {
-            to: address
-          },
-          fromBlock: 0n
-        }).catch(() => []),
-        publicClient.getLogs({
-          address: [CONTRACTS.usdc, CONTRACTS.wmst],
-          event: {
-            type: 'event',
-            name: 'Approval',
-            inputs: [
-              { type: 'address', name: 'owner', indexed: true },
-              { type: 'address', name: 'spender', indexed: true },
-              { type: 'uint256', name: 'value' }
-            ]
-          },
-          args: {
-            owner: address
-          },
-          fromBlock: 0n
-        }).catch(() => [])
-      ]);
-
-      logs = [...sentLogs, ...receivedLogs];
-      approvals = approvalLogs;
-
-      // Get unique block numbers to fetch timestamps
-      const uniqueBlocks = Array.from(new Set([...logs, ...approvals].map(l => l.blockNumber).filter(Boolean))) as bigint[];
-      const blockTimestamps: Record<string, number> = {};
-      if (uniqueBlocks.length > 0) {
-        try {
-          const blocksToFetch = uniqueBlocks.slice(0, 10);
-          const blockData = await Promise.all(
-            blocksToFetch.map(b => publicClient.getBlock({ blockNumber: b }))
-          );
-          blockData.forEach(b => {
-            blockTimestamps[b.number.toString()] = Number(b.timestamp) * 1000;
-          });
-        } catch (err) {
-          console.error("Error fetching block timestamps", err);
-        }
-      }
-
-      // Group logs by transaction hash
-      const logsByTx: Record<string, any[]> = {};
-      for (const log of logs) {
-        const hash = log.transactionHash;
-        if (!hash) continue;
-        if (!logsByTx[hash]) {
-          logsByTx[hash] = [];
-        }
-        logsByTx[hash].push(log);
-      }
-
-      for (const [hash, txLogs] of Object.entries(logsByTx)) {
-        txLogs.sort((a, b) => (a.logIndex ?? 0) - (b.logIndex ?? 0));
-        
-        const userOut = txLogs.find(l => l.args?.from?.toLowerCase() === address.toLowerCase());
-        const userIn = txLogs.find(l => l.args?.to?.toLowerCase() === address.toLowerCase());
-        
-        const firstLog = txLogs[0];
-        const blockNum = firstLog.blockNumber;
-        const timestamp = blockTimestamps[blockNum?.toString() || ""] || Date.now();
-        
-        const hasRouter = txLogs.some(l => 
-          [CONTRACTS.swapRouter?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
-          [CONTRACTS.swapRouter?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
-        );
-        
-        const hasPositionManager = txLogs.some(l =>
-          [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.from?.toLowerCase() || "") ||
-          [CONTRACTS.positionManager?.toLowerCase()].includes(l.args?.to?.toLowerCase() || "")
-        );
-
-        if (userOut && userIn && (hasRouter || hasPositionManager || txLogs.length >= 2)) {
-          const tokenOut = TOKENS.find(t => t.address?.toLowerCase() === userOut.address?.toLowerCase());
-          const tokenIn = TOKENS.find(t => t.address?.toLowerCase() === userIn.address?.toLowerCase());
-          
-          if (tokenOut && tokenIn) {
-            const amountOut = safeNumber(userOut.args.value, tokenOut.decimals);
-            const amountIn = safeNumber(userIn.args.value, tokenIn.decimals);
-            
-            const priceOut = tokenOut.symbol === "USDC" ? 1.0 : (tokenOut.symbol === "WMST" || tokenOut.symbol === "MST" ? liveMstPrice : tokenOut.priceUsd ?? 0);
-            const amountUsd = amountOut * priceOut;
-            
-            activity.push({
-              id: hash,
-              type: hasPositionManager ? "liquidity" : "swap",
-              asset: `${tokenOut.symbol} → ${tokenIn.symbol}`,
-              amount: amountIn,
-              amountUsd,
-              network: chainLabel(chainId),
-              hash,
-              timestamp,
-              status: "confirmed",
-              explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
-            });
-            continue;
-          }
-        }
-        
-        for (const log of txLogs) {
-          const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
-          if (!token) continue;
-          
-          const valueRaw = log.args?.value;
-          if (typeof valueRaw !== 'bigint') continue;
-          
-          const amount = safeNumber(valueRaw, token.decimals);
-          const price = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" || token.symbol === "MST" ? liveMstPrice : token.priceUsd ?? 0);
-          const amountUsd = amount * price;
-          
-          const from = log.args?.from;
-          let type: PortfolioActivity["type"] = "send";
-          if (from?.toLowerCase() === address.toLowerCase()) {
-            type = "send";
-          } else {
-            type = "receive";
-          }
-          
-          if (hasPositionManager) {
-            type = "liquidity";
-          } else if (hasRouter) {
-            type = "swap";
-          }
-          
-          activity.push({
-            id: `${hash}-${log.logIndex}`,
-            type,
-            asset: token.symbol,
-            amount,
-            amountUsd,
-            network: chainLabel(chainId),
-            hash,
-            timestamp,
-            status: "confirmed",
-            explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
-          });
-        }
-      }
-
-      for (const log of approvals) {
-        const hash = log.transactionHash;
-        if (!hash) continue;
-        
-        const token = TOKENS.find(t => t.address?.toLowerCase() === log.address?.toLowerCase());
-        if (!token) continue;
-        
-        const valueRaw = log.args?.value;
-        if (typeof valueRaw !== 'bigint') continue;
-        
-        const amount = safeNumber(valueRaw, token.decimals);
-        const price = token.symbol === "USDC" ? 1.0 : (token.symbol === "WMST" || token.symbol === "MST" ? liveMstPrice : token.priceUsd ?? 0);
-        const amountUsd = amount * price;
-        
-        activity.push({
-          id: `${hash}-approve-${log.logIndex}`,
-          type: "approve",
-          asset: token.symbol,
-          amount,
-          amountUsd,
-          network: chainLabel(chainId),
-          hash,
-          timestamp: blockTimestamps[log.blockNumber?.toString() || ""] || Date.now(),
-          status: "confirmed",
-          explorerUrl: `${mstChain.blockExplorers.default.url}/tx/${hash}`
-        });
-      }
-      
-      activity.sort((a, b) => b.timestamp - a.timestamp);
-    } catch (logErr) {
-      console.error("Error processing transaction logs in portfolio service fallback", logErr);
+    const isToken0Usdc = token0.toLowerCase() === getContractAddress("usdc", targetChainId).toLowerCase();
+    if (isToken0Usdc) {
+      usdcReserve = amount0 / 1e18;
+      wmstReserve = amount1 / 1e18;
+    } else {
+      wmstReserve = amount0 / 1e18;
+      usdcReserve = amount1 / 1e18;
     }
-  }
 
-  const totalValueUsd = assets.reduce((sum, asset) => sum + asset.valueUsd, 0) + lpValueUsd;
+    const lpLiquidityUsd = wmstReserve * liveMstPrice + usdcReserve;
+
+    positions.push({
+      id: `lp-pos-${tokenIdStr}`,
+      pool: "WMST / USDC 0.30%",
+      assets: ["WMST", "USDC"],
+      network: chainLabel(targetChainId),
+      liquidityUsd: lpLiquidityUsd,
+      apr: 12.4,
+      feesEarnedUsd: 0,
+      status: (poolTick >= tickLower && poolTick <= tickUpper) ? "In Range" : "Out Of Range",
+      hash: `0xpos-${tokenIdStr}`,
+      reserves: {
+        WMST: wmstReserve,
+        USDC: usdcReserve
+      }
+    });
+  });
+
+  const assetsValueUsd = assets.reduce((sum, asset) => sum + asset.valueUsd, 0);
+  const positionsValueUsd = positions.reduce((sum, pos) => sum + pos.liquidityUsd, 0);
+  const totalValueUsd = assetsValueUsd + positionsValueUsd;
+
   const sortedAssets = [...assets].sort((a, b) => b.valueUsd - a.valueUsd);
 
   const withAllocation = sortedAssets.map((asset) => ({
     ...asset,
-    allocation: totalValueUsd > 0 ? (asset.valueUsd / totalValueUsd) * 100 : 0,
+    allocation: assetsValueUsd > 0 ? (asset.valueUsd / assetsValueUsd) * 100 : 0,
   }));
 
   const largestHolding = withAllocation[0];
 
+  const parsedActivities: PortfolioActivity[] = [];
+  const balanceHistory: Array<{ timestamp: number; balances: Record<string, number> }> = [];
+
+  const getTokenPrice = (symbol: string) => {
+    if (symbol === "USDC") return 1.0;
+    if (symbol === "WMST" || symbol === "MST") return liveMstPrice;
+    const existing = TOKENS.find(t => t.symbol === symbol);
+    return existing?.priceUsd ?? 0;
+  };
+
+  try {
+    const fromBlock = 0n;
+
+    const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
+      publicClient.getLogs({
+        event: erc20TransferEvent,
+        args: {
+          from: address
+        },
+        fromBlock,
+        toBlock: "latest"
+      }).catch((err) => {
+        console.error("Error fetching sent logs in service:", err);
+        return [];
+      }),
+      publicClient.getLogs({
+        event: erc20TransferEvent,
+        args: {
+          to: address
+        },
+        fromBlock,
+        toBlock: "latest"
+      }).catch((err) => {
+        console.error("Error fetching received logs in service:", err);
+        return [];
+      }),
+      publicClient.getLogs({
+        event: erc20ApprovalEvent,
+        args: {
+          owner: address
+        },
+        fromBlock,
+        toBlock: "latest"
+      }).catch((err) => {
+        console.error("Error fetching approval logs in service:", err);
+        return [];
+      })
+    ]);
+
+    console.log("Activity logs fetched count:", { sent: sentLogs.length, received: receivedLogs.length, approvals: approvalLogs.length });
+
+    const logsByHash: Record<string, any[]> = {};
+    for (const log of [...sentLogs, ...receivedLogs, ...approvalLogs]) {
+      if (!log.transactionHash) continue;
+      if (!logsByHash[log.transactionHash]) {
+        logsByHash[log.transactionHash] = [];
+      }
+      if (!logsByHash[log.transactionHash].some(l => l.logIndex === log.logIndex)) {
+        logsByHash[log.transactionHash].push(log);
+      }
+    }
+
+    const tokenByAddress = (addr: string) => {
+      return TOKENS.find(t => t.address?.toLowerCase() === addr.toLowerCase());
+    };
+
+    const logsList = Object.entries(logsByHash).map(([hash, logs]) => {
+      const minBlock = Math.min(...logs.map(l => Number(l.blockNumber || 0)));
+      return { hash, logs, minBlock };
+    }).sort((a, b) => b.minBlock - a.minBlock);
+
+    const latestTxHashes = logsList.slice(0, 500);
+
+    const parsedActivitiesRaw = await Promise.all(
+      latestTxHashes.map(async ({ hash, logs: txLogs }) => {
+        try {
+          const sends = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).from?.toLowerCase() === address.toLowerCase());
+          const receives = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).to?.toLowerCase() === address.toLowerCase());
+          const approvals = txLogs.filter(l => l.eventName === "Approval" && l.args && (l.args as any).owner?.toLowerCase() === address.toLowerCase());
+
+          let type: PortfolioActivityType = "send";
+          let assetLabel = "";
+          let amount = 0;
+          let amountUsd = 0;
+
+          if (approvals.length > 0) {
+            type = "approve";
+            const token = await getTokenMeta(publicClient, approvals[0].address);
+            assetLabel = token.symbol;
+            amount = Number(formatUnits((approvals[0].args as any).value || 0n, token.decimals));
+            amountUsd = 0;
+          } else {
+            // Check for Wrap/Unwrap (Transfer to/from zero address) on WMST contract
+            const wrapLog = receives.find(r => r.args && (r.args as any).from === '0x0000000000000000000000000000000000000000');
+            const unwrapLog = sends.find(s => s.args && (s.args as any).to === '0x0000000000000000000000000000000000000000');
+
+            if (wrapLog && wrapLog.address.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase()) {
+              type = "swap";
+              assetLabel = "MST → WMST";
+              amount = Number(formatUnits((wrapLog.args as any).value || 0n, 18));
+              amountUsd = amount * liveMstPrice;
+            } else if (unwrapLog && unwrapLog.address.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase()) {
+              type = "swap";
+              assetLabel = "WMST → MST";
+              amount = Number(formatUnits((unwrapLog.args as any).value || 0n, 18));
+              amountUsd = amount * liveMstPrice;
+            } else {
+              let txObj = txCache.get(hash);
+              if (!txObj) {
+                txObj = await publicClient.getTransaction({ hash: hash as Address }).catch(() => null);
+                if (txObj) txCache.set(hash, txObj);
+              }
+              const nativeValueSent = txObj && txObj.from.toLowerCase() === address.toLowerCase() ? Number(formatUnits(txObj.value, 18)) : 0;
+
+              const toAddress = txObj?.to?.toLowerCase();
+              const isLiquidityTx = txObj && toAddress && (
+                toAddress === getContractAddress("testingExecutor", targetChainId).toLowerCase() ||
+                toAddress === getContractAddress("lpStateStorage", targetChainId).toLowerCase() ||
+                toAddress === getContractAddress("positionManager", targetChainId).toLowerCase()
+              );
+
+              if (isLiquidityTx) {
+                type = "liquidity";
+                if (sends.length > 0) {
+                  const parts = await Promise.all(sends.map(async s => (await getTokenMeta(publicClient, s.address)).symbol));
+                  assetLabel = parts.filter(Boolean).join(" + ") || "LP Deposit";
+
+                  let totalSendUsd = 0;
+                  for (const s of sends) {
+                    const token = await getTokenMeta(publicClient, s.address);
+                    if (s.args) {
+                      const amt = Number(formatUnits((s.args as any).value || 0n, token.decimals));
+                      const price = getTokenPrice(token.symbol);
+                      totalSendUsd += amt * price;
+                    }
+                  }
+                  const singleToken = await getTokenMeta(publicClient, sends[0].address);
+                  amount = sends.length === 1
+                    ? Number(formatUnits((sends[0].args as any).value || 0n, singleToken.decimals))
+                    : 0;
+                  amountUsd = totalSendUsd;
+                } else if (receives.length > 0) {
+                  const parts = await Promise.all(receives.map(async r => (await getTokenMeta(publicClient, r.address)).symbol));
+                  assetLabel = parts.filter(Boolean).join(" + ") || "LP Withdrawal";
+
+                  let totalReceiveUsd = 0;
+                  for (const r of receives) {
+                    const token = await getTokenMeta(publicClient, r.address);
+                    if (r.args) {
+                      const amt = Number(formatUnits((r.args as any).value || 0n, token.decimals));
+                      const price = getTokenPrice(token.symbol);
+                      totalReceiveUsd += amt * price;
+                    }
+                  }
+                  const singleToken = await getTokenMeta(publicClient, receives[0].address);
+                  amount = receives.length === 1
+                    ? Number(formatUnits((receives[0].args as any).value || 0n, singleToken.decimals))
+                    : 0;
+                  amountUsd = totalReceiveUsd;
+                } else {
+                  assetLabel = "LP Interaction";
+                  amount = 0;
+                  amountUsd = 0;
+                }
+              } else if (sends.length > 0 && receives.length > 0) {
+                type = "swap";
+                const sendToken = await getTokenMeta(publicClient, sends[0].address);
+                const receiveToken = await getTokenMeta(publicClient, receives[0].address);
+
+                if (sendToken && receiveToken) {
+                  assetLabel = `${sendToken.symbol} → ${receiveToken.symbol}`;
+                  amount = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                  const price = getTokenPrice(receiveToken.symbol);
+                  amountUsd = amount * price;
+                } else {
+                  return null;
+                }
+              } else if (sends.length > 0) {
+                const sendToken = await getTokenMeta(publicClient, sends[0].address);
+                if (sendToken) {
+                  const isSwapToNative = txObj && txObj.to?.toLowerCase() === getContractAddress("swapRouter", targetChainId).toLowerCase();
+                  if (isSwapToNative) {
+                    type = "swap";
+                    assetLabel = `${sendToken.symbol} → MST`;
+                    amount = Number(formatUnits((sends[0].args as any).value || 0n, sendToken.decimals));
+                    const sendPrice = getTokenPrice(sendToken.symbol);
+                    amountUsd = amount * sendPrice;
+                  } else {
+                    type = "send";
+                    assetLabel = sendToken.symbol;
+                    amount = Number(formatUnits((sends[0].args as any).value || 0n, sendToken.decimals));
+                    const price = getTokenPrice(sendToken.symbol);
+                    amountUsd = amount * price;
+                  }
+                } else {
+                  return null;
+                }
+              } else if (receives.length > 0) {
+                const receiveToken = await getTokenMeta(publicClient, receives[0].address);
+                if (receiveToken) {
+                  if (nativeValueSent > 0) {
+                    type = "swap";
+                    assetLabel = `MST → ${receiveToken.symbol}`;
+                    amount = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                    const price = getTokenPrice(receiveToken.symbol);
+                    amountUsd = amount * price;
+                  } else {
+                    type = "receive";
+                    assetLabel = receiveToken.symbol;
+                    amount = Number(formatUnits((receives[0].args as any).value || 0n, receiveToken.decimals));
+                    const price = getTokenPrice(receiveToken.symbol);
+                    amountUsd = amount * price;
+                  }
+                } else {
+                  return null;
+                }
+              } else {
+                return null;
+              }
+            }
+          }
+
+          let timestamp = Date.now();
+          const firstLog = txLogs[0];
+          if (firstLog && firstLog.blockNumber) {
+            let block = blockCache.get(firstLog.blockNumber);
+            if (!block) {
+              block = await publicClient.getBlock({ blockNumber: firstLog.blockNumber }).catch(() => null);
+              if (block) blockCache.set(firstLog.blockNumber, block);
+            }
+            if (block && block.timestamp) {
+              timestamp = Number(block.timestamp) * 1000;
+            }
+          }
+
+          return {
+            id: `${address}-${hash}`,
+            type,
+            asset: assetLabel,
+            amount,
+            amountUsd,
+            network: chainLabel(targetChainId),
+            hash,
+            timestamp,
+            status: "confirmed",
+            explorerUrl: `https://testnet.mstscan.com/tx/${hash}`,
+          } as PortfolioActivity;
+        } catch (err) {
+          console.error(`Error parsing tx logs for hash ${hash}`, err);
+          return null;
+        }
+      })
+    );
+
+    parsedActivities.push(...parsedActivitiesRaw.filter((a): a is PortfolioActivity => a !== null));
+
+    // Direct log-based balance reconstruction
+    const runningBalances: Record<string, number> = {};
+    assets.forEach((asset) => {
+      runningBalances[asset.symbol] = asset.balance;
+    });
+
+    balanceHistory.push({
+      timestamp: Date.now(),
+      balances: { ...runningBalances }
+    });
+
+    for (const { hash, logs: txLogs } of logsList) {
+      const sends = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).from?.toLowerCase() === address.toLowerCase());
+      const receives = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).to?.toLowerCase() === address.toLowerCase());
+
+      sends.forEach(log => {
+        const lowerAddr = log.address.toLowerCase();
+        let token = TOKENS.find(t => t.address?.toLowerCase() === lowerAddr);
+        let symbol = token?.symbol;
+        let decimals = token?.decimals;
+        if (!symbol && tokenMetaCache.has(lowerAddr)) {
+          const cached = tokenMetaCache.get(lowerAddr)!;
+          symbol = cached.symbol;
+          decimals = cached.decimals;
+        }
+        if (symbol && decimals !== undefined) {
+          const amt = Number(formatUnits((log.args as any).value || 0n, decimals));
+          runningBalances[symbol] = (runningBalances[symbol] || 0) + amt;
+        }
+      });
+
+      receives.forEach(log => {
+        const lowerAddr = log.address.toLowerCase();
+        let token = TOKENS.find(t => t.address?.toLowerCase() === lowerAddr);
+        let symbol = token?.symbol;
+        let decimals = token?.decimals;
+        if (!symbol && tokenMetaCache.has(lowerAddr)) {
+          const cached = tokenMetaCache.get(lowerAddr)!;
+          symbol = cached.symbol;
+          decimals = cached.decimals;
+        }
+        if (symbol && decimals !== undefined) {
+          const amt = Number(formatUnits((log.args as any).value || 0n, decimals));
+          runningBalances[symbol] = Math.max(0, (runningBalances[symbol] || 0) - amt);
+        }
+      });
+
+      let timestamp = Date.now();
+      const firstLog = txLogs[0];
+      if (firstLog && firstLog.blockNumber) {
+        const cachedBlock = blockCache.get(firstLog.blockNumber);
+        if (cachedBlock && cachedBlock.timestamp) {
+          timestamp = Number(cachedBlock.timestamp) * 1000;
+        }
+      }
+
+      balanceHistory.push({
+        timestamp,
+        balances: { ...runningBalances }
+      });
+    }
+
+    balanceHistory.sort((a, b) => a.timestamp - b.timestamp);
+  } catch (err) {
+    console.error("General error querying logs for activity", err);
+  }
+
+  const sortedActivities = parsedActivities.sort((a, b) => b.timestamp - a.timestamp);
+  const activity: PortfolioActivity[] = sortedActivities;
+
+  const isNativeBalance = true;
+  const nativeSymbol = "WMST";
 
   const portfolio: Portfolio = {
     address,
     portfolioName: "Connected Wallet",
-    walletLabel: chainLabel(chainId),
+    walletLabel: chainLabel(targetChainId),
     ensName: null,
-    valueUsd: totalValueUsd,
+    valueUsd: wmstAmount,
     change24h: 0,
-    networkCount: totalValueUsd > 0 ? 1 : 0,
+    networkCount: assetsValueUsd > 0 ? 1 : 0,
     assetCount: withAllocation.length,
+    isNativeBalance,
+    nativeSymbol,
     stats: {
       totalAssets: withAllocation.length,
-      totalNetworks: totalValueUsd > 0 ? 1 : 0,
+      totalNetworks: assetsValueUsd > 0 ? 1 : 0,
       totalPositions: positions.length,
       transactions: activity.length,
       portfolioChange24h: 0,
       largestHolding: largestHolding
         ? {
-            symbol: largestHolding.symbol,
-            valueUsd: largestHolding.valueUsd,
-            allocation: totalValueUsd > 0 ? (largestHolding.valueUsd / totalValueUsd) * 100 : 0,
-          }
+          symbol: largestHolding.symbol,
+          valueUsd: largestHolding.valueUsd,
+          allocation: totalValueUsd > 0 ? (largestHolding.valueUsd / totalValueUsd) * 100 : 0,
+        }
         : { symbol: "—", valueUsd: 0, allocation: 0 },
     },
   };
+
+  console.log("=== PORTFOLIO SNAPSHOT DIAGNOSTICS ===");
+  console.log("Connected Address:", address);
+  console.log("Native tMST balance raw:", nativeBalance.toString());
+  console.log("Native tMST balance parsed:", nativeAmount, "tMST");
+  console.log("WMST balance parsed:", wmstAmount, "WMST");
+  console.log("MST Price:", liveMstPrice);
+  console.log("Asset list balances:", assets.map(a => `${a.symbol}: balance=${a.balance}, price=${a.priceUsd}, valueUsd=${a.valueUsd}`));
+  console.log("LP Positions count:", positions.length);
+  positions.forEach(p => {
+    console.log(`  LP Position ID ${p.id}: reserves USDC=${p.reserves?.USDC}, WMST=${p.reserves?.WMST}, totalUsd=${p.liquidityUsd}`);
+  });
+  console.log("Calculated Total Wallet assetsValueUsd:", assetsValueUsd);
+  console.log("======================================");
 
   return {
     portfolio,
@@ -602,7 +798,8 @@ export async function getWalletPortfolioSnapshot({
     positions,
     chartPoint: {
       time: Math.floor(Date.now() / 1000),
-      value: totalValueUsd,
+      value: wmstAmount,
     },
+    balanceHistory,
   };
 }

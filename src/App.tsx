@@ -112,8 +112,12 @@ function Navigation() {
           {/* Logo */}
           <div className="flex items-center gap-3">
             <Link to="/" className="flex items-center gap-2 group">
-              <img src="/logo.png" alt="MSWAP Logo" className="h-8 w-8 object-contain brightness-200 grayscale opacity-90 group-hover:opacity-100 transition-opacity" />
-              <span className="text-[17px] font-medium text-white tracking-wide font-display group-hover:text-white/90 transition-colors">MSWAP</span>
+              <img
+                src={isDark ? "/WhiteRapidLogo.png" : "/RapidLogo.png"}
+                alt="MSWAP Logo"
+                className="object-contain opacity-90 group-hover:opacity-100 transition-opacity"
+                style={{ width: "7.3rem", height: "3.5rem" }}
+              />
             </Link>
           </div>
 
@@ -428,22 +432,20 @@ function MainLayout() {
   // Sync dark class with document element for Tailwind and custom CSS variables
   useEffect(() => {
     const root = window.document.documentElement;
-    if (isLandingPage) {
-      root.classList.remove("dark");
-    } else if (isDark) {
+    if (isDark) {
       root.classList.add("dark");
     } else {
       root.classList.remove("dark");
     }
-  }, [isDark, isLandingPage]);
+  }, [isDark]);
 
   return (
     <div
       className={`relative min-h-screen transition-colors duration-300 ease-in-out select-none overflow-hidden
-        ${isLandingPage ? "text-zinc-950 bg-white" : isDark ? "text-white" : "text-zinc-950"}`}
+        ${isLandingPage ? (isDark ? "text-zinc-50 bg-zinc-950" : "text-zinc-950 bg-white") : isDark ? "text-white" : "text-zinc-950"}`}
       style={{
         background: isLandingPage
-          ? "#ffffff"
+          ? (isDark ? "#09090b" : "#ffffff")
           : isDark
             ? "radial-gradient(120% 120% at 50% 0%, #0A1128 0%, #05070F 100%)"
             : "radial-gradient(120% 120% at 50% 0%, #EBF3FF 0%, #F1F5F9 100%)"

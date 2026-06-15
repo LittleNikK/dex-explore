@@ -1,7 +1,7 @@
 import type { Portfolio } from "../types";
 import { PortfolioMetricCard } from "./PortfolioMetricCard";
 import { formatPortfolioPct, formatAssetUsd, formatLargeNumber } from "../utils/portfolio-format";
-import { displayTokenSymbol } from "@/config/contracts";
+import { displayTokenSymbol } from "@/config";
 
 interface PortfolioSummaryCardsProps {
   portfolio: Portfolio | null;

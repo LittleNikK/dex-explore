@@ -20,7 +20,9 @@ function reconstructHistory(
   assets: PortfolioAsset[],
   activity: PortfolioActivity[],
   timeframe: PortfolioTimeframe,
-  liveMstPrice: number
+  liveMstPrice: number,
+  mode: "all-usd" | "wmst-only",
+  directBalanceHistory?: Array<{ timestamp: number; balances: Record<string, number> }>
 ): PortfolioChartPoint[] {
   const now = Math.floor(Date.now() / 1000);
   
@@ -57,12 +59,10 @@ function reconstructHistory(
   }
 
   // 2. Map current asset balances
-  const currentBalances: Record<string, number> = {};
   const tokenPrices: Record<string, number> = {};
 
   assets.forEach((asset) => {
     const symbol = asset.symbol.toUpperCase();
-    currentBalances[symbol] = asset.balance;
     tokenPrices[symbol] = asset.priceUsd;
   });
 
@@ -74,56 +74,71 @@ function reconstructHistory(
     tokenPrices["WMST"] = liveMstPrice || 0.5;
   }
 
-  // 3. Build chronological list of state-changing transactions
-  const sortedTxs = [...activity]
-    .map(tx => ({
-      ...tx,
-      timeSec: Math.floor(tx.timestamp / 1000)
-    }))
-    .filter(tx => tx.timeSec <= now)
-    .sort((a, b) => b.timeSec - a.timeSec);
+  // 3. Build chronological list of state-changing transactions or use direct balances
+  let balanceHistory: Array<{ timestamp: number; balances: Record<string, number> }> = [];
+  let runningBalances: Record<string, number> = {};
 
-  // 4. Reconstruct historical balances at each transaction time boundary
-  const balanceHistory: Array<{ timestamp: number; balances: Record<string, number> }> = [];
+  if (directBalanceHistory && directBalanceHistory.length > 0) {
+    balanceHistory = [...directBalanceHistory];
+    runningBalances = balanceHistory[0]?.balances || {};
+  } else {
+    const currentBalances: Record<string, number> = {};
+    assets.forEach((asset) => {
+      const symbol = asset.symbol.toUpperCase();
+      currentBalances[symbol] = asset.balance;
+    });
 
-  let runningBalances = { ...currentBalances };
-  balanceHistory.push({
-    timestamp: now,
-    balances: { ...runningBalances }
-  });
-
-  sortedTxs.forEach((tx) => {
-    const txAsset = tx.asset.toUpperCase();
-    
-    if (tx.type === "send") {
-      runningBalances[txAsset] = (runningBalances[txAsset] || 0) + tx.amount;
-    } else if (tx.type === "receive") {
-      runningBalances[txAsset] = Math.max(0, (runningBalances[txAsset] || 0) - tx.amount);
-    } else if (tx.type === "swap") {
-      const parts = txAsset.split("→").map(s => s.trim());
-      if (parts.length === 2) {
-        const [sendSymbol, receiveSymbol] = parts;
-        runningBalances[receiveSymbol] = Math.max(0, (runningBalances[receiveSymbol] || 0) - tx.amount);
-        const sendPrice = tokenPrices[sendSymbol] || liveMstPrice || 0.5;
-        const sendAmount = sendPrice > 0 ? tx.amountUsd / sendPrice : tx.amount;
-        runningBalances[sendSymbol] = (runningBalances[sendSymbol] || 0) + sendAmount;
-      }
-    }
-    
+    runningBalances = { ...currentBalances };
     balanceHistory.push({
-      timestamp: tx.timeSec,
+      timestamp: now * 1000,
       balances: { ...runningBalances }
     });
-  });
+
+    const sortedTxs = [...activity]
+      .map(tx => ({
+        ...tx,
+        timeSec: Math.floor(tx.timestamp / 1000)
+      }))
+      .filter(tx => tx.timeSec <= now)
+      .sort((a, b) => b.timeSec - a.timeSec);
+
+    sortedTxs.forEach((tx) => {
+      const txAsset = tx.asset.toUpperCase();
+      
+      if (tx.type === "send") {
+        runningBalances[txAsset] = (runningBalances[txAsset] || 0) + tx.amount;
+      } else if (tx.type === "receive") {
+        runningBalances[txAsset] = Math.max(0, (runningBalances[txAsset] || 0) - tx.amount);
+      } else if (tx.type === "swap") {
+        const parts = txAsset.split("→").map(s => s.trim());
+        if (parts.length === 2) {
+          const [sendSymbol, receiveSymbol] = parts;
+          if (receiveSymbol !== "MST") {
+            runningBalances[receiveSymbol] = Math.max(0, (runningBalances[receiveSymbol] || 0) - tx.amount);
+          }
+          if (sendSymbol !== "MST") {
+            const sendPrice = tokenPrices[sendSymbol] || liveMstPrice || 0.5;
+            const sendAmount = sendPrice > 0 ? tx.amountUsd / sendPrice : tx.amount;
+            runningBalances[sendSymbol] = (runningBalances[sendSymbol] || 0) + sendAmount;
+          }
+        }
+      }
+      
+      balanceHistory.push({
+        timestamp: tx.timestamp,
+        balances: { ...runningBalances }
+      });
+    });
+  }
 
   balanceHistory.sort((a, b) => a.timestamp - b.timestamp);
 
   function getBalancesAtTimestamp(t: number): Record<string, number> {
-    const snapshot = balanceHistory.find(s => s.timestamp >= t);
+    const snapshot = balanceHistory.find(s => Math.floor(s.timestamp / 1000) >= t);
     return snapshot ? snapshot.balances : runningBalances;
   }
 
-  // 5. Generate regular chart points
+  // 4. Generate regular chart points
   const points: PortfolioChartPoint[] = [];
   for (let i = 0; i <= pointsCount; i++) {
     const t = startTime + i * step;
@@ -132,16 +147,23 @@ function reconstructHistory(
     
     const balances = getBalancesAtTimestamp(effectiveT);
     
-    let valueUsd = 0;
-    Object.entries(balances).forEach(([symbol, bal]) => {
-      const price = tokenPrices[symbol] || 0;
-      valueUsd += bal * price;
-    });
-
-    points.push({
-      time: effectiveT,
-      value: Number(valueUsd.toFixed(2))
-    });
+    if (mode === "all-usd") {
+      let totalUsd = 0;
+      Object.entries(balances).forEach(([symbol, bal]) => {
+        const price = tokenPrices[symbol] || 0;
+        totalUsd += bal * price;
+      });
+      points.push({
+        time: effectiveT,
+        value: Number(totalUsd.toFixed(2))
+      });
+    } else {
+      const wmstBal = balances["WMST"] || 0;
+      points.push({
+        time: effectiveT,
+        value: Number(wmstBal.toFixed(2))
+      });
+    }
   }
 
   return points;
@@ -185,35 +207,54 @@ export function PortfolioPage() {
 
     const assets = walletPortfolioQuery.data.assets;
     const activity = walletPortfolioQuery.data.activity;
-    const positions = walletPortfolioQuery.data.positions;
     
     const mstAsset = assets.find(a => a.symbol === "MST" || a.symbol === "WMST");
     const liveMstPrice = mstAsset ? mstAsset.priceUsd : 0.5;
 
-    return reconstructHistory(assets, activity, selectedTimeframe, liveMstPrice);
+    return reconstructHistory(assets, activity, selectedTimeframe, liveMstPrice, "all-usd", walletPortfolioQuery.data.balanceHistory);
   }, [historyQuery.data, isConnected, walletPortfolioQuery.data, selectedTimeframe]);
 
-  // Compute live change percentage from history
-  const computedChange24h = useMemo(() => {
-    if (activeHistory.length < 2) return 0;
-    const first = activeHistory[0].value;
-    const last = activeHistory[activeHistory.length - 1].value;
+  // Reconstruct history specifically for the header (always 1D / 24h timeframe to remain separate and static)
+  const headerHistory = useMemo(() => {
+    if (!isConnected) return [];
+    if (!walletPortfolioQuery.data) return [];
+
+    const assets = walletPortfolioQuery.data.assets;
+    const activity = walletPortfolioQuery.data.activity;
+    
+    const mstAsset = assets.find(a => a.symbol === "MST" || a.symbol === "WMST");
+    const liveMstPrice = mstAsset ? mstAsset.priceUsd : 0.5;
+
+    return reconstructHistory(assets, activity, "1D", liveMstPrice, "wmst-only", walletPortfolioQuery.data.balanceHistory);
+  }, [isConnected, walletPortfolioQuery.data]);
+
+  // Compute live change percentage from headerHistory (for the header card)
+  const computedHeaderChange = useMemo(() => {
+    if (!isConnected) return activePortfolioRaw?.change24h ?? 0;
+    if (headerHistory.length < 2) return 0;
+    const first = headerHistory[0].value;
+    const last = headerHistory[headerHistory.length - 1].value;
     if (first === 0) return 0;
     return ((last - first) / first) * 100;
-  }, [activeHistory]);
+  }, [headerHistory, isConnected, activePortfolioRaw]);
 
   // Inject dynamic computed change
   const activePortfolio = useMemo(() => {
     if (!activePortfolioRaw) return null;
     return {
       ...activePortfolioRaw,
-      change24h: computedChange24h,
+      change24h: computedHeaderChange,
       stats: {
         ...activePortfolioRaw.stats,
-        portfolioChange24h: computedChange24h,
+        portfolioChange24h: computedHeaderChange,
       },
     };
-  }, [activePortfolioRaw, computedChange24h]);
+  }, [activePortfolioRaw, computedHeaderChange]);
+
+  // Calculate total USD value of all assets combined
+  const totalPortfolioUsd = useMemo(() => {
+    return activeAssets.reduce((sum, asset) => sum + (asset.balance * asset.priceUsd), 0);
+  }, [activeAssets]);
 
   const walletAddress = useMemo(
     () => address ?? activePortfolio?.address ?? "0xA7B4c1d2E3f4567890AbCDef1234567890abF31",
@@ -258,7 +299,9 @@ export function PortfolioPage() {
                 ? historyQuery.error.message
                 : null
           }
-          valueUsd={activePortfolio?.valueUsd}
+          valueUsd={isConnected ? totalPortfolioUsd : activePortfolio?.valueUsd}
+          isNativeBalance={isConnected ? false : activePortfolio?.isNativeBalance}
+          nativeSymbol={isConnected ? undefined : activePortfolio?.nativeSymbol}
         />
 
         <PortfolioAllocation
@@ -274,6 +317,8 @@ export function PortfolioPage() {
                 ? assetsQuery.error.message
                 : null
           }
+          isNativeBalance={activePortfolio?.isNativeBalance}
+          nativeSymbol={activePortfolio?.nativeSymbol}
         />
       </div>
 
@@ -318,6 +363,8 @@ export function PortfolioPage() {
               : null
         }
       />
+
+
     </div>
   );
 }

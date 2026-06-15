@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { TokenAvatar } from "@/components/swap/TokenSelectorModal";
 import { formatPortfolioPct, formatPortfolioUsd, formatAssetUsd, formatActivityUsd, formatPortfolioTime, activityLabel } from "../utils/portfolio-format";
-import { displayTokenSymbol } from "@/config/contracts";
+import { displayTokenSymbol } from "@/config";
 import type { PortfolioActivity, PortfolioAsset, PortfolioPosition } from "../types";
 
 interface PortfolioOverviewPanelsProps {
