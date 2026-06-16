@@ -94,3 +94,20 @@ export function getOtherAmountForToken(
   }
 }
 
+export function tickToPrice(tick: number, decimalsA: number, decimalsB: number, isToken0A: boolean): number {
+  const ratio = Math.pow(1.0001, isToken0A ? tick : -tick);
+  return ratio * Math.pow(10, decimalsA - decimalsB);
+}
+
+export function priceToTick(price: number, decimalsA: number, decimalsB: number, isToken0A: boolean): number {
+  if (price <= 0) return 0;
+  const ratio = price / Math.pow(10, decimalsA - decimalsB);
+  const logRatio = Math.log(ratio) / Math.log(1.0001);
+  const tick = isToken0A ? logRatio : -logRatio;
+  let rounded = Math.round(tick);
+  if (rounded < -887272) rounded = -887272;
+  if (rounded > 887272) rounded = 887272;
+  return rounded;
+}
+
+
