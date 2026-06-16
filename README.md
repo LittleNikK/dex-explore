@@ -698,3 +698,5 @@ export function CandlestickChart({ poolAddress, timeframe }: { poolAddress: stri
 Use the NestJS command line or API logs to diagnose sync issues:
 * **Duplicate Errors:** Swaps and Pools enforce unique hashes; trying to log the same transaction twice returns a `400 Bad Request`.
 * **Database Reset:** In case of testnet/local resets, purge MongoDB databases by running `db.dropDatabase()` inside the Mongo Shell.
+#   d e x - e x p l o r e  
+ 
