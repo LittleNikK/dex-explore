@@ -2,16 +2,14 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck, Loader2, CheckCircle2, XCircle } from "lucide-react";
-import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
+import { formatUnits, parseUnits, type Address } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
 import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import { MstTokenModal } from "../components/swap/MstTokenModal";
 import { useThemeStore } from "../store/themeStore";
-import { getAmountsForLiquidity, getOtherAmountForToken } from "../utils/uniswap-math";
-import { poolService } from "../services/pool.service";
-import { liquidityService } from "../services/liquidity.service";
+import { getAmountsForLiquidity, getOtherAmountForToken, tickToPrice, priceToTick } from "../utils/uniswap-math";
 
 const poolAbi = [
   {
@@ -68,22 +66,28 @@ export default function LiquidityPage() {
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
 
-  const [tokenA_Symbol, setTokenA_Symbol] = useState("WMST");
-  const [tokenB_Symbol, setTokenB_Symbol] = useState("USDC");
+  const [tokenA_Symbol, setTokenA_Symbol] = useState("");
+  const [tokenB_Symbol, setTokenB_Symbol] = useState("");
   const [modalOpen, setModalOpen] = useState<"A" | "B" | null>(null);
 
   const handleTokenSelect = (symbol: string) => {
+    setRangeStrategy("stable");
+    setRangeMode("custom");
     if (modalOpen === "A") {
-      if (symbol === tokenB_Symbol) setTokenB_Symbol(tokenA_Symbol);
+      if (tokenB_Symbol && symbol === tokenB_Symbol) {
+        setTokenB_Symbol(tokenA_Symbol);
+      }
       setTokenA_Symbol(symbol);
     } else if (modalOpen === "B") {
-      if (symbol === tokenA_Symbol) setTokenA_Symbol(tokenB_Symbol);
+      if (tokenA_Symbol && symbol === tokenA_Symbol) {
+        setTokenA_Symbol(tokenB_Symbol);
+      }
       setTokenB_Symbol(symbol);
     }
   };
 
-  const wmstToken = useMemo(() => getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : CONTRACTS.wmst }, [tokenA_Symbol]);
-  const usdcToken = useMemo(() => getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : CONTRACTS.wmst }, [tokenB_Symbol]);
+  const wmstToken = useMemo(() => getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : (tokenA_Symbol === "WMST" ? CONTRACTS.wmst : undefined) }, [tokenA_Symbol]);
+  const usdcToken = useMemo(() => getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : (tokenB_Symbol === "WMST" ? CONTRACTS.wmst : undefined) }, [tokenB_Symbol]);
 
   // 1. Fetch live balances
   const [wmstBalance, setWmstBalance] = useState("0.00");
@@ -144,8 +148,21 @@ export default function LiquidityPage() {
   const [initFee, setInitFee] = useState<number>(3000); // 0.3%
   const [initWmst, setInitWmst] = useState("");
   const [initUsdc, setInitUsdc] = useState("");
-  const [initTickLower, setInitTickLower] = useState("-887220"); // Full Range Lower
-  const [initTickUpper, setInitTickUpper] = useState("887220"); // Full Range Upper
+  const [lastEdited, setLastEdited] = useState<"A" | "B" | null>(null);
+  const [initTickLower, setInitTickLower] = useState("-887220");
+  const [initTickUpper, setInitTickUpper] = useState("887220");
+
+  const [rangeMode, setRangeMode] = useState<"custom" | "full">("custom");
+  const [rangeStrategy, setRangeStrategy] = useState<"stable" | "wide" | "custom" | "full">("stable");
+  const [priceLower, setPriceLower] = useState("");
+  const [priceUpper, setPriceUpper] = useState("");
+
+  const isToken0A = useMemo(() => {
+    const addrA = wmstToken.address;
+    const addrB = usdcToken.address;
+    if (!addrA || !addrB) return true;
+    return addrA.toLowerCase() < addrB.toLowerCase();
+  }, [wmstToken.address, usdcToken.address]);
 
   // Input states for Adding Liquidity (scoped to expanded position card via common state cleared on expansion change)
   const [addAmount0, setAddAmount0] = useState("");
@@ -171,6 +188,139 @@ export default function LiquidityPage() {
   const [poolCurrentPrice, setPoolCurrentPrice] = useState<number | null>(null);
   const [poolSqrtPriceX96, setPoolSqrtPriceX96] = useState<bigint | null>(null);
   const [creationMode, setCreationMode] = useState<"new" | "existing">("new");
+
+  const [quoterPrice, setQuoterPrice] = useState<number | null>(null);
+  const [quoterAmountB, setQuoterAmountB] = useState<string>("");
+  const [quoterAmountA, setQuoterAmountA] = useState<string>("");
+
+  useEffect(() => {
+    let active = true;
+    if (!publicClient || !tokenA_Symbol || !tokenB_Symbol || !isPoolInitialized) {
+      setQuoterPrice(null);
+      return;
+    }
+
+    const fetchQuoterPrice = async () => {
+      try {
+        const wAddress = wmstToken.address;
+        const uAddress = usdcToken.address;
+        if (!wAddress || !uAddress) return;
+
+        const oneUnitRaw = parseUnits("1", wmstToken.decimals);
+        const { result } = await publicClient.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wAddress,
+              tokenOut: uAddress,
+              amountIn: oneUnitRaw,
+              fee: initFee,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+        if (!active) return;
+        const amountOut = (result as any)[0] as bigint;
+        const price = Number(formatUnits(amountOut, usdcToken.decimals));
+        setQuoterPrice(price);
+      } catch (err) {
+        if (active) setQuoterPrice(null);
+      }
+    };
+
+    fetchQuoterPrice();
+    return () => {
+      active = false;
+    };
+  }, [tokenA_Symbol, tokenB_Symbol, initFee, isPoolInitialized, publicClient]);
+
+  useEffect(() => {
+    let active = true;
+    if (!publicClient || !tokenA_Symbol || !tokenB_Symbol || !initWmst || isNaN(Number(initWmst)) || Number(initWmst) <= 0 || !isPoolInitialized) {
+      setQuoterAmountB("");
+      return;
+    }
+
+    const fetchQuote = async () => {
+      try {
+        const wAddress = wmstToken.address;
+        const uAddress = usdcToken.address;
+        if (!wAddress || !uAddress) return;
+
+        const amountInRaw = parseUnits(initWmst, wmstToken.decimals);
+        const { result } = await publicClient.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: wAddress,
+              tokenOut: uAddress,
+              amountIn: amountInRaw,
+              fee: initFee,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+        if (!active) return;
+        const amountOut = (result as any)[0] as bigint;
+        const formatted = formatUnits(amountOut, usdcToken.decimals);
+        setQuoterAmountB(Number(formatted).toFixed(4));
+      } catch (err) {
+        if (active) setQuoterAmountB("");
+      }
+    };
+
+    fetchQuote();
+    return () => {
+      active = false;
+    };
+  }, [initWmst, tokenA_Symbol, tokenB_Symbol, initFee, isPoolInitialized, publicClient]);
+
+  useEffect(() => {
+    let active = true;
+    if (!publicClient || !tokenA_Symbol || !tokenB_Symbol || !initUsdc || isNaN(Number(initUsdc)) || Number(initUsdc) <= 0 || !isPoolInitialized) {
+      setQuoterAmountA("");
+      return;
+    }
+
+    const fetchQuote = async () => {
+      try {
+        const wAddress = wmstToken.address;
+        const uAddress = usdcToken.address;
+        if (!wAddress || !uAddress) return;
+
+        const amountInRaw = parseUnits(initUsdc, usdcToken.decimals);
+        const { result } = await publicClient.simulateContract({
+          address: CONTRACTS.quoterV2,
+          abi: quoterV2Abi,
+          functionName: "quoteExactInputSingle",
+          args: [
+            {
+              tokenIn: uAddress,
+              tokenOut: wAddress,
+              amountIn: amountInRaw,
+              fee: initFee,
+              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+            }
+          ]
+        });
+        if (!active) return;
+        const amountOut = (result as any)[0] as bigint;
+        const formatted = formatUnits(amountOut, wmstToken.decimals);
+        setQuoterAmountA(Number(formatted).toFixed(4));
+      } catch (err) {
+        if (active) setQuoterAmountA("");
+      }
+    };
+
+    fetchQuote();
+    return () => {
+      active = false;
+    };
+  }, [initUsdc, tokenA_Symbol, tokenB_Symbol, initFee, isPoolInitialized, publicClient]);
   const [currency, setCurrency] = useState<"USD" | "INR">("INR");
   const USD_TO_INR = 83.5;
 
@@ -182,6 +332,218 @@ export default function LiquidityPage() {
     return `$${valUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const getRefPrice = () => {
+    if (creationMode === "existing" && poolCurrentPrice !== null) {
+      return poolCurrentPrice;
+    }
+    const wAmt = Number(initWmst);
+    const uAmt = Number(initUsdc);
+    if (wAmt > 0 && uAmt > 0) {
+      return uAmt / wAmt;
+    }
+    return 1.0;
+  };
+
+  const getDeviation = (priceStr: string) => {
+    const currentPrice = getRefPrice();
+    if (currentPrice <= 0) return "";
+    const price = Number(priceStr);
+    if (isNaN(price) || price <= 0) return "";
+    const dev = ((price - currentPrice) / currentPrice) * 100;
+    if (dev === 0) return "0%";
+    return (dev > 0 ? "+" : "") + dev.toFixed(2) + "%";
+  };
+
+  const getDeviationLabel = (isLower: boolean) => {
+    if (rangeMode === "full") {
+      return isLower ? "-100%" : "+∞%";
+    }
+    const priceStr = isLower ? priceLower : priceUpper;
+    return getDeviation(priceStr);
+  };
+
+  const updateTicksFromStrategy = (
+    strategy: "stable" | "wide" | "custom" | "full",
+    fee: number,
+    refPrice: number
+  ) => {
+    const spacing = getTickSpacing(fee);
+    const minTick = Math.ceil(-887272 / spacing) * spacing;
+    const maxTick = Math.floor(887272 / spacing) * spacing;
+
+    if (strategy === "full") {
+      setInitTickLower(minTick.toString());
+      setInitTickUpper(maxTick.toString());
+      setPriceLower("0");
+      setPriceUpper("Infinity");
+      return;
+    }
+
+    if (refPrice <= 0) return;
+
+    const currentTick = priceToTick(refPrice, wmstToken.decimals, usdcToken.decimals, isToken0A);
+    const currentTickAligned = Math.round(currentTick / spacing) * spacing;
+
+    let lowerTick = currentTickAligned;
+    let upperTick = currentTickAligned;
+
+    if (strategy === "stable") {
+      lowerTick = currentTickAligned - 3 * spacing;
+      upperTick = currentTickAligned + 3 * spacing;
+    } else if (strategy === "wide") {
+      const pLower = refPrice * 0.5;
+      const pUpper = refPrice * 2.0;
+      lowerTick = priceToTick(pLower, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      upperTick = priceToTick(pUpper, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      lowerTick = Math.round(lowerTick / spacing) * spacing;
+      upperTick = Math.round(upperTick / spacing) * spacing;
+    } else {
+      return;
+    }
+
+    if (lowerTick < minTick) lowerTick = minTick;
+    if (upperTick > maxTick) upperTick = maxTick;
+    if (lowerTick >= upperTick) {
+      lowerTick = upperTick - spacing;
+    }
+
+    setInitTickLower(lowerTick.toString());
+    setInitTickUpper(upperTick.toString());
+
+    const pLower = tickToPrice(lowerTick, wmstToken.decimals, usdcToken.decimals, isToken0A);
+    const pUpper = tickToPrice(upperTick, wmstToken.decimals, usdcToken.decimals, isToken0A);
+    setPriceLower(pLower.toFixed(4));
+    setPriceUpper(pUpper.toFixed(4));
+  };
+
+  useEffect(() => {
+    if (!tokenA_Symbol || !tokenB_Symbol) return;
+    const refPrice = getRefPrice();
+    if (rangeMode === "full") {
+      updateTicksFromStrategy("full", initFee, refPrice);
+    } else {
+      updateTicksFromStrategy(rangeStrategy, initFee, refPrice);
+    }
+  }, [rangeMode, rangeStrategy, initFee, tokenA_Symbol, tokenB_Symbol, poolCurrentPrice]);
+
+  const handlePriceLowerChange = (val: string) => {
+    setPriceLower(val);
+    setRangeStrategy("custom");
+    const num = Number(val);
+    if (!isNaN(num) && num > 0) {
+      const tick = priceToTick(num, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      const spacing = getTickSpacing(initFee);
+      const aligned = Math.round(tick / spacing) * spacing;
+      setInitTickLower(aligned.toString());
+    }
+  };
+
+  const handlePriceUpperChange = (val: string) => {
+    setPriceUpper(val);
+    setRangeStrategy("custom");
+    const num = Number(val);
+    if (!isNaN(num) && num > 0) {
+      const tick = priceToTick(num, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      const spacing = getTickSpacing(initFee);
+      const aligned = Math.round(tick / spacing) * spacing;
+      setInitTickUpper(aligned.toString());
+    }
+  };
+
+  const handlePriceLowerBlur = () => {
+    const tick = Number(initTickLower);
+    if (!isNaN(tick)) {
+      const snappedPrice = tickToPrice(tick, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      setPriceLower(snappedPrice.toFixed(4));
+    }
+  };
+
+  const handlePriceUpperBlur = () => {
+    const tick = Number(initTickUpper);
+    if (!isNaN(tick)) {
+      const snappedPrice = tickToPrice(tick, wmstToken.decimals, usdcToken.decimals, isToken0A);
+      setPriceUpper(snappedPrice.toFixed(4));
+    }
+  };
+
+  const getEstimatedLiquidityAndAPR = () => {
+    const wAmt = Number(initWmst);
+    const uAmt = Number(initUsdc);
+    if (isNaN(wAmt) || wAmt <= 0 || isNaN(uAmt) || uAmt <= 0) return { apr: 0, dailyFee: 0, userDepositUSD: 0 };
+
+    const currentPrice = getRefPrice();
+    const lowerPrice = rangeMode === "full" ? 0.0001 : Number(priceLower) || 0.0001;
+    const upperPrice = rangeMode === "full" ? 1000000000 : Number(priceUpper) || 1000000000;
+
+    const sqrtPc = Math.sqrt(currentPrice);
+    const sqrtPa = Math.sqrt(lowerPrice);
+    const sqrtPb = Math.sqrt(upperPrice);
+
+    let L = 0;
+    if (currentPrice < lowerPrice) {
+      L = wAmt / (1 / sqrtPa - 1 / sqrtPb);
+    } else if (currentPrice > upperPrice) {
+      L = uAmt / (sqrtPb - sqrtPa);
+    } else {
+      const Lx = wAmt / (1 / sqrtPc - 1 / sqrtPb);
+      const Ly = uAmt / (sqrtPc - sqrtPa);
+      L = Math.min(Lx, Ly);
+    }
+
+    if (L <= 0 || isNaN(L)) return { apr: 0, dailyFee: 0, userDepositUSD: 0 };
+
+    let dailyVolume = 250000;
+    if (initFee === 500) dailyVolume = 50000;
+    else if (initFee === 10000) dailyVolume = 15000;
+
+    const feePercent = initFee / 1000000;
+    const poolVolumeFee = dailyVolume * feePercent;
+    
+    const userDepositUSD = (wAmt * getTokenPrice(tokenA_Symbol)) + (uAmt * getTokenPrice(tokenB_Symbol));
+    if (userDepositUSD <= 0) return { apr: 0, dailyFee: 0, userDepositUSD: 0 };
+
+    const poolTVL = 150000;
+    const userShare = userDepositUSD / (poolTVL + userDepositUSD);
+    const dailyFee = poolVolumeFee * userShare;
+    const yearlyFee = dailyFee * 365;
+    const apr = (yearlyFee / userDepositUSD) * 100;
+
+    return {
+      apr: isFinite(apr) ? apr : 0,
+      dailyFee: isFinite(dailyFee) ? dailyFee : 0,
+      userDepositUSD
+    };
+  };
+
+  const isTokenInputDisabled = (isTokenA: boolean) => {
+    if (!isPoolInitialized || poolCurrentPrice === null) return false;
+    const pLower = rangeMode === "full" ? 0 : Number(priceLower) || 0;
+    const pUpper = rangeMode === "full" ? Infinity : Number(priceUpper) || Infinity;
+
+    if (isToken0A) {
+      if (isTokenA) {
+        return poolCurrentPrice > pUpper;
+      } else {
+        return poolCurrentPrice < pLower;
+      }
+    } else {
+      if (isTokenA) {
+        return poolCurrentPrice < pLower;
+      } else {
+        return poolCurrentPrice > pUpper;
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isTokenInputDisabled(true)) {
+      setInitWmst("0");
+    }
+    if (isTokenInputDisabled(false)) {
+      setInitUsdc("0");
+    }
+  }, [priceLower, priceUpper, poolCurrentPrice, isPoolInitialized]);
+
   const getTickSpacing = (fee: number): number => {
     if (fee === 100) return 1;
     if (fee === 500) return 10;
@@ -190,17 +552,15 @@ export default function LiquidityPage() {
     return 60;
   };
 
-  const alignTick = (tickStr: string, fee: number): number => {
+  const alignTick = (tickStr: string | number, fee: number): number => {
     const tick = Number(tickStr);
     if (isNaN(tick)) return 0;
     const spacing = getTickSpacing(fee);
     let aligned = Math.round(tick / spacing) * spacing;
-    if (aligned < -887272) aligned = -887272;
-    if (aligned > 887272) aligned = 887272;
-    const remainder = aligned % spacing;
-    if (remainder !== 0) {
-      aligned = aligned - remainder;
-    }
+    const minTick = Math.ceil(-887272 / spacing) * spacing;
+    const maxTick = Math.floor(887272 / spacing) * spacing;
+    if (aligned < minTick) aligned = minTick;
+    if (aligned > maxTick) aligned = maxTick;
     return aligned;
   };
 
@@ -224,12 +584,20 @@ export default function LiquidityPage() {
       const isInputToken0 = inputSymbol === tokenA_Symbol ? isWmstToken0 : !isWmstToken0;
       const inputTokenIndex = isInputToken0 ? 0 : 1;
 
+      // Swap and invert tick bounds if token order is swapped on-chain
+      let calcTickLower = lowerTick;
+      let calcTickUpper = upperTick;
+      if (!isWmstToken0) {
+        calcTickLower = -upperTick;
+        calcTickUpper = -lowerTick;
+      }
+
       const otherAmountRaw = getOtherAmountForToken(
         amountRaw,
         inputTokenIndex,
         poolSqrtPriceX96,
-        lowerTick,
-        upperTick
+        calcTickLower,
+        calcTickUpper
       );
 
       const otherDecimals = inputSymbol === tokenA_Symbol ? usdcToken.decimals : wmstToken.decimals;
@@ -243,16 +611,16 @@ export default function LiquidityPage() {
 
   useEffect(() => {
     if (creationMode === "existing" && isPoolInitialized && poolSqrtPriceX96) {
-      if (initWmst && !isNaN(Number(initWmst))) {
+      if (lastEdited === "A" && initWmst && !isNaN(Number(initWmst))) {
         setInitUsdc(getV3Amounts(initWmst, tokenA_Symbol));
-      } else if (initUsdc && !isNaN(Number(initUsdc))) {
+      } else if (lastEdited === "B" && initUsdc && !isNaN(Number(initUsdc))) {
         setInitWmst(getV3Amounts(initUsdc, tokenB_Symbol));
       }
     }
-  }, [creationMode, isPoolInitialized, poolSqrtPriceX96, initTickLower, initTickUpper, usdcToken.decimals, wmstToken.decimals]);
+  }, [creationMode, isPoolInitialized, poolSqrtPriceX96, initTickLower, initTickUpper, usdcToken.decimals, wmstToken.decimals, tokenA_Symbol, tokenB_Symbol, initWmst, initUsdc, lastEdited]);
 
   const checkPoolStatus = async (fee: number) => {
-    if (!publicClient) return;
+    if (!publicClient || !tokenA_Symbol || !tokenB_Symbol) return;
     try {
       const t0 = wmstToken.address as Address;
       const t1 = usdcToken.address as Address;
@@ -276,6 +644,7 @@ export default function LiquidityPage() {
         if (sqrtPriceX96 > 0n) {
           setIsPoolInitialized(true);
           setPoolSqrtPriceX96(sqrtPriceX96);
+          setCreationMode("existing");
           const isWmstToken0 = t0.toLowerCase() === wmstToken.address?.toLowerCase();
           const rawPrice = Number(sqrtPriceX96) / (2 ** 96);
           const ratioSquared = rawPrice * rawPrice;
@@ -288,16 +657,19 @@ export default function LiquidityPage() {
       setIsPoolInitialized(false);
       setPoolCurrentPrice(null);
       setPoolSqrtPriceX96(null);
+      setCreationMode("new");
     } catch (err) {
       console.error("Error checking pool status", err);
       setIsPoolInitialized(false);
       setPoolCurrentPrice(null);
       setPoolSqrtPriceX96(null);
+      setCreationMode("new");
     }
   };
 
   const handleInitWmstChange = (val: string) => {
     setInitWmst(val);
+    setLastEdited("A");
     if (creationMode === "existing") {
       if (!val.trim()) {
         setInitUsdc("");
@@ -312,6 +684,7 @@ export default function LiquidityPage() {
 
   const handleInitUsdcChange = (val: string) => {
     setInitUsdc(val);
+    setLastEdited("B");
     if (creationMode === "existing") {
       if (!val.trim()) {
         setInitWmst("");
@@ -327,13 +700,8 @@ export default function LiquidityPage() {
   // Auto-set ticks based on selected fee tier to prevent spacing reverts
   const handleFeeTierChange = (fee: number) => {
     setInitFee(fee);
-    if (fee === 10000) {
-      setInitTickLower("-887200");
-      setInitTickUpper("887200");
-    } else {
-      setInitTickLower("-887220");
-      setInitTickUpper("887220");
-    }
+    setRangeStrategy("stable");
+    setRangeMode("custom");
     checkPoolStatus(fee);
   };
 
@@ -375,35 +743,49 @@ export default function LiquidityPage() {
     }
 
     fetchMstPrice(client);
-    const interval = setInterval(() => fetchMstPrice(client), 30000);
+    const interval = setInterval(() => fetchMstPrice(client), 15000);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [chainId]);
+  }, [publicClient]);
 
-  // Helper: Fetch user ERC20 token balances
+    // Helper: Fetch user ERC20 token balances
   const fetchERC20Balances = async () => {
     if (!isConnected || !address || !publicClient) return;
     try {
-      if (wmstToken.address) {
-        const bal = await publicClient.readContract({
-          address: wmstToken.address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [address]
-        });
-        setWmstBalance(Number(formatUnits(bal, wmstToken.decimals)).toFixed(4));
+      if (tokenA_Symbol) {
+        if (tokenA_Symbol === "MST" || !wmstToken.address) {
+          const bal = await publicClient.getBalance({ address });
+          setWmstBalance(Number(formatUnits(bal, 18)).toFixed(4));
+        } else {
+          const bal = await publicClient.readContract({
+            address: wmstToken.address,
+            abi: erc20Abi,
+            functionName: "balanceOf",
+            args: [address]
+          });
+          setWmstBalance(Number(formatUnits(bal, wmstToken.decimals)).toFixed(4));
+        }
+      } else {
+        setWmstBalance("0.00");
       }
-      if (usdcToken.address) {
-        const bal = await publicClient.readContract({
-          address: usdcToken.address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [address]
-        });
-        setUsdcBalance(Number(formatUnits(bal, usdcToken.decimals)).toFixed(4));
+      if (tokenB_Symbol) {
+        if (tokenB_Symbol === "MST" || !usdcToken.address) {
+          const bal = await publicClient.getBalance({ address });
+          setUsdcBalance(Number(formatUnits(bal, 18)).toFixed(4));
+        } else {
+          const bal = await publicClient.readContract({
+            address: usdcToken.address,
+            abi: erc20Abi,
+            functionName: "balanceOf",
+            args: [address]
+          });
+          setUsdcBalance(Number(formatUnits(bal, usdcToken.decimals)).toFixed(4));
+        }
+      } else {
+        setUsdcBalance("0.00");
       }
     } catch (e) {
       console.error("Error fetching ERC20 balances", e);
@@ -427,107 +809,113 @@ export default function LiquidityPage() {
         return;
       }
 
-      // 1. Fetch all token IDs in parallel
-      const tokenIds = await Promise.all(
-        Array.from({ length: Number(npmBalance) }, (_, i) =>
-          publicClient.readContract({
+      const tempPositions: PositionItem[] = [];
+
+      for (let i = 0n; i < npmBalance; i++) {
+        try {
+          const tokenId = await publicClient.readContract({
             address: CONTRACTS.positionManager,
             abi: nonfungiblePositionManagerAbi,
             functionName: "tokenOfOwnerByIndex",
-            args: [address, BigInt(i)]
-          }) as Promise<bigint>
-        )
-      );
+            args: [address, i]
+          }) as bigint;
 
-      // 2. Fetch details for all token IDs in parallel
-      const tempPositions = await Promise.all(
-        tokenIds.map(async (tokenId) => {
-          try {
-            const positionInfo = await publicClient.readContract({
-              address: CONTRACTS.positionManager,
-              abi: nonfungiblePositionManagerAbi,
-              functionName: "positions",
-              args: [tokenId]
-            }) as any;
+          const positionInfo = await publicClient.readContract({
+            address: CONTRACTS.positionManager,
+            abi: nonfungiblePositionManagerAbi,
+            functionName: "positions",
+            args: [tokenId]
+          }) as any;
 
-            const token0 = positionInfo[2] as Address;
-            const token1 = positionInfo[3] as Address;
-            const fee = positionInfo[4] as number;
-            const tickLower = positionInfo[5] as number;
-            const tickUpper = positionInfo[6] as number;
-            const liquidity = positionInfo[7] as bigint;
-            const owed0 = positionInfo[10] as bigint;
-            const owed1 = positionInfo[11] as bigint;
+                    const token0 = positionInfo[2] as Address;
+          const token1 = positionInfo[3] as Address;
+          const fee = positionInfo[4] as number;
+          const tickLower = positionInfo[5] as number;
+          const tickUpper = positionInfo[6] as number;
+          const liquidity = positionInfo[7] as bigint;
+          const owed0 = positionInfo[10] as bigint;
+          const owed1 = positionInfo[11] as bigint;
 
-            const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
-            const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
+          const t0Lower = token0.toLowerCase();
+          const t1Lower = token1.toLowerCase();
+          const wmstLower = CONTRACTS.wmst.toLowerCase();
+          const usdcLower = CONTRACTS.usdc.toLowerCase();
 
-            const poolAddr = await publicClient.readContract({
-              address: CONTRACTS.factory,
-              abi: uniswapV3FactoryAbi,
-              functionName: "getPool",
-              args: [token0, token1, fee]
-            }) as string;
+          // Only display positions matching the active token pair (WMST and USDC)
+          const isToken0Match = t0Lower === wmstLower || t0Lower === usdcLower;
+          const isToken1Match = t1Lower === wmstLower || t1Lower === usdcLower;
 
-            let isInRange = false;
-            let poolSqrtPriceX96 = 0n;
-            let amount0 = 0n;
-            let amount1 = 0n;
-
-            if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
-              try {
-                const slot0 = await publicClient.readContract({
-                  address: poolAddr as Address,
-                  abi: poolAbi,
-                  functionName: "slot0"
-                }) as any;
-                const sqrtPriceX96 = slot0[0] as bigint;
-                const activeTick = slot0[1] as number;
-
-                poolSqrtPriceX96 = sqrtPriceX96;
-                isInRange = activeTick >= tickLower && activeTick <= tickUpper;
-
-                if (liquidity > 0n) {
-                  const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
-                    liquidity,
-                    sqrtPriceX96,
-                    tickLower,
-                    tickUpper
-                  );
-                  amount0 = calcAmt0;
-                  amount1 = calcAmt1;
-                }
-              } catch (mathErr) {
-                console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
-              }
-            }
-
-            return {
-              tokenId,
-              liquidity,
-              token0,
-              token1,
-              fee,
-              tickLower,
-              tickUpper,
-              tokensOwed0: owed0,
-              tokensOwed1: owed1,
-              poolAddress: poolAddr,
-              amount0,
-              amount1,
-              isInRange,
-              token0Info: t0Info as TokenConfig,
-              token1Info: t1Info as TokenConfig,
-              poolSqrtPriceX96
-            };
-          } catch (err) {
-            console.error(`Error querying details for tokenId ${tokenId}`, err);
-            return null;
+          if (!isToken0Match || !isToken1Match) {
+            continue; // Skip positions from old address config
           }
-        })
-      );
 
-      setPositions(tempPositions.filter((p): p is PositionItem => p !== null));
+          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
+          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
+
+          const poolAddr = await publicClient.readContract({
+            address: CONTRACTS.factory,
+            abi: uniswapV3FactoryAbi,
+            functionName: "getPool",
+            args: [token0, token1, fee]
+          }) as string;
+
+          let isInRange = false;
+          let poolSqrtPriceX96 = 0n;
+          let amount0 = 0n;
+          let amount1 = 0n;
+
+          if (poolAddr && poolAddr !== "0x0000000000000000000000000000000000000000") {
+            try {
+              const slot0 = await publicClient.readContract({
+                address: poolAddr as Address,
+                abi: poolAbi,
+                functionName: "slot0"
+              }) as any;
+              const sqrtPriceX96 = slot0[0] as bigint;
+              const activeTick = slot0[1] as number;
+
+              poolSqrtPriceX96 = sqrtPriceX96;
+              isInRange = activeTick >= tickLower && activeTick <= tickUpper;
+
+              if (liquidity > 0n) {
+                const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+                  liquidity,
+                  sqrtPriceX96,
+                  tickLower,
+                  tickUpper
+                );
+                amount0 = calcAmt0;
+                amount1 = calcAmt1;
+              }
+            } catch (mathErr) {
+              console.error("Failed calculating reserves from pool slot0 in LiquidityPage", mathErr);
+            }
+          }
+
+          tempPositions.push({
+            tokenId,
+            liquidity,
+            token0,
+            token1,
+            fee,
+            tickLower,
+            tickUpper,
+            tokensOwed0: owed0,
+            tokensOwed1: owed1,
+            poolAddress: poolAddr,
+            amount0,
+            amount1,
+            isInRange,
+            token0Info: t0Info as TokenConfig,
+            token1Info: t1Info as TokenConfig,
+            poolSqrtPriceX96
+          });
+        } catch (err) {
+          console.error(`Error querying details for tokenId index ${i}`, err);
+        }
+      }
+
+      setPositions(tempPositions);
     } catch (e) {
       console.error("Error fetching LP states in LiquidityPage", e);
     }
@@ -536,26 +924,28 @@ export default function LiquidityPage() {
   // Fetch all live values on load and periodically
   useEffect(() => {
     fetchERC20Balances();
-    if (currentView === "list") {
-      fetchLPState();
+    fetchLPState();
+    if (currentView === "create") {
+      checkPoolStatus(initFee);
     }
 
     const interval = setInterval(() => {
       fetchERC20Balances();
-      if (currentView === "list") {
-        fetchLPState();
+      fetchLPState();
+      if (currentView === "create") {
+        checkPoolStatus(initFee);
       }
-    }, 30000);
+    }, 8000);
 
     return () => clearInterval(interval);
-  }, [address, isConnected, chainId, currentView]);
+  }, [address, isConnected, publicClient, initFee, currentView, tokenA_Symbol, tokenB_Symbol, wmstToken.address, usdcToken.address]);
 
   // Sync pool existence status
   useEffect(() => {
     if (currentView === "create") {
       checkPoolStatus(initFee);
     }
-  }, [initFee, currentView, chainId]);
+  }, [initFee, currentView, publicClient, tokenA_Symbol, tokenB_Symbol, wmstToken.address, usdcToken.address]);
 
   // Helper: Request token spending approvals
   async function approveTokenIfNeeded(tokenAddress: Address, amountRaw: bigint, symbol: string) {
@@ -716,11 +1106,18 @@ export default function LiquidityPage() {
         let t1 = usdcToken.address as Address;
         let amount0 = wmstRaw;
         let amount1 = usdcRaw;
+        let tickLowerAligned = alignTick(initTickLower, initFee);
+        let tickUpperAligned = alignTick(initTickUpper, initFee);
+
         if (t0.toLowerCase() > t1.toLowerCase()) {
           t0 = usdcToken.address as Address;
           t1 = wmstToken.address as Address;
           amount0 = usdcRaw;
           amount1 = wmstRaw;
+
+          const temp = tickLowerAligned;
+          tickLowerAligned = -tickUpperAligned;
+          tickUpperAligned = -temp;
         }
 
         const dec0 = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? wmstToken.decimals : usdcToken.decimals;
@@ -784,12 +1181,12 @@ export default function LiquidityPage() {
               token0: t0,
               token1: t1,
               fee: initFee,
-              tickLower: alignTick(initTickLower, initFee),
-              tickUpper: alignTick(initTickUpper, initFee),
+              tickLower: tickLowerAligned,
+              tickUpper: tickUpperAligned,
               amount0Desired: amount0,
               amount1Desired: amount1,
-              amount0Min: 0n,
-              amount1Min: 0n,
+              amount0Min: amount0 * 995n / 1000n,
+              amount1Min: amount1 * 995n / 1000n,
               recipient: address as Address,
               deadline: deadline
             }
@@ -798,38 +1195,7 @@ export default function LiquidityPage() {
 
         setTxHash(mintHash);
         setStatusText("Waiting for position mint confirmation...");
-        const receipt = await publicClient?.waitForTransactionReceipt({ hash: mintHash });
-
-        // Register pool in backend database
-        try {
-          const poolAddress = await publicClient?.readContract({
-            address: CONTRACTS.factory,
-            abi: uniswapV3FactoryAbi,
-            functionName: "getPool",
-            args: [t0, t1, initFee]
-          }) as string;
-
-          const t0Symbol = t0.toLowerCase() === wmstToken.address?.toLowerCase() ? tokenA_Symbol : tokenB_Symbol;
-          const t1Symbol = t1.toLowerCase() === wmstToken.address?.toLowerCase() ? tokenA_Symbol : tokenB_Symbol;
-
-          await poolService.createPool({
-            poolAddress: poolAddress.toLowerCase(),
-            token0Address: t0.toLowerCase(),
-            token1Address: t1.toLowerCase(),
-            token0Symbol: t0Symbol,
-            token1Symbol: t1Symbol,
-            creatorWallet: address!.toLowerCase(),
-            txHash: mintHash,
-            chainId: chainId!,
-            feeTier: initFee,
-            token0Decimals: dec0,
-            token1Decimals: dec1,
-            token0InitialAmount: amount0.toString(),
-            token1InitialAmount: amount1.toString(),
-          });
-        } catch (backendErr) {
-          console.error("Failed to register pool in backend:", backendErr);
-        }
+        await publicClient?.waitForTransactionReceipt({ hash: mintHash });
 
         // Mark as completed
         setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "completed" } : s));
@@ -908,8 +1274,8 @@ export default function LiquidityPage() {
             tokenId: expandedPosition.tokenId,
             amount0Desired: amount0Desired,
             amount1Desired: amount1Desired,
-            amount0Min: 0n,
-            amount1Min: 0n,
+            amount0Min: amount0Desired * 995n / 1000n,
+            amount1Min: amount1Desired * 995n / 1000n,
             deadline: deadline
           }
         ]
@@ -917,57 +1283,7 @@ export default function LiquidityPage() {
 
       setTxHash(hash);
       setStatusText("Waiting for block confirmation on MST Blockchain...");
-      const receipt = await publicClient?.waitForTransactionReceipt({ hash });
-
-      // Log add liquidity to backend database
-      try {
-        const LP_EVENTS_ABI = [
-          {
-            type: "event",
-            name: "IncreaseLiquidity",
-            inputs: [
-              { indexed: true, name: "tokenId", type: "uint256" },
-              { indexed: false, name: "liquidity", type: "uint128" },
-              { indexed: false, name: "amount0", type: "uint256" },
-              { indexed: false, name: "amount1", type: "uint256" }
-            ]
-          }
-        ] as const;
-
-        let rawAmt0 = amount0Desired.toString();
-        let rawAmt1 = amount1Desired.toString();
-
-        if (receipt && receipt.logs) {
-          for (const log of receipt.logs) {
-            try {
-              const decoded = decodeEventLog({
-                abi: LP_EVENTS_ABI,
-                data: log.data,
-                topics: log.topics
-              });
-              if (decoded.eventName === "IncreaseLiquidity") {
-                rawAmt0 = decoded.args.amount0.toString();
-                rawAmt1 = decoded.args.amount1.toString();
-                break;
-              }
-            } catch (e) {
-              // Ignore
-            }
-          }
-        }
-
-        await liquidityService.recordAddLiquidity({
-          poolAddress: expandedPosition.poolAddress.toLowerCase(),
-          walletAddress: address!.toLowerCase(),
-          token0Amount: rawAmt0,
-          token1Amount: rawAmt1,
-          txHash: hash,
-          chainId: chainId!,
-        });
-      } catch (backendErr) {
-        console.error("Failed to log liquidity addition to backend:", backendErr);
-      }
-
+      await publicClient?.waitForTransactionReceipt({ hash });
       setStatusText("Concentrated liquidity successfully added!");
       setAddAmount0("");
       setAddAmount1("");
@@ -997,7 +1313,8 @@ export default function LiquidityPage() {
 
     try {
       const liqToRemove = (expandedPosition.liquidity * BigInt(removePercent)) / 100n;
-
+      const expectedAmount0 = (expandedPosition.amount0 * BigInt(removePercent)) / 100n;
+      const expectedAmount1 = (expandedPosition.amount1 * BigInt(removePercent)) / 100n;
       setStatusText(`Confirming removal of ${removePercent}% liquidity...`);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200); // 20 mins
 
@@ -1009,8 +1326,8 @@ export default function LiquidityPage() {
           {
             tokenId: expandedPosition.tokenId,
             liquidity: liqToRemove,
-            amount0Min: 0n,
-            amount1Min: 0n,
+            amount0Min: (expectedAmount0 * 995n) / 1000n,
+            amount1Min: (expectedAmount1 * 995n) / 1000n,
             deadline: deadline
           }
         ]
@@ -1018,56 +1335,7 @@ export default function LiquidityPage() {
 
       setTxHash(decreaseHash);
       setStatusText("Waiting for decrease liquidity transaction receipt...");
-      const receipt = await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
-
-      // Log remove liquidity to backend database
-      try {
-        const LP_EVENTS_ABI = [
-          {
-            type: "event",
-            name: "DecreaseLiquidity",
-            inputs: [
-              { indexed: true, name: "tokenId", type: "uint256" },
-              { indexed: false, name: "liquidity", type: "uint128" },
-              { indexed: false, name: "amount0", type: "uint256" },
-              { indexed: false, name: "amount1", type: "uint256" }
-            ]
-          }
-        ] as const;
-
-        let rawAmt0 = "0";
-        let rawAmt1 = "0";
-
-        if (receipt && receipt.logs) {
-          for (const log of receipt.logs) {
-            try {
-              const decoded = decodeEventLog({
-                abi: LP_EVENTS_ABI,
-                data: log.data,
-                topics: log.topics
-              });
-              if (decoded.eventName === "DecreaseLiquidity") {
-                rawAmt0 = decoded.args.amount0.toString();
-                rawAmt1 = decoded.args.amount1.toString();
-                break;
-              }
-            } catch (e) {
-              // Ignore
-            }
-          }
-        }
-
-        await liquidityService.recordRemoveLiquidity({
-          poolAddress: expandedPosition.poolAddress.toLowerCase(),
-          walletAddress: address!.toLowerCase(),
-          token0Amount: rawAmt0,
-          token1Amount: rawAmt1,
-          txHash: decreaseHash,
-          chainId: chainId!,
-        });
-      } catch (backendErr) {
-        console.error("Failed to log liquidity removal to backend:", backendErr);
-      }
+      await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
 
       // Now collect the tokens from decrease liquidity
       setStatusText("Collecting tokens from position...");
@@ -1418,7 +1686,6 @@ export default function LiquidityPage() {
                             </div>
                           </div>
                         </div>
-
                         {/* Collapsible content (Accordion Details) */}
                         <AnimatePresence initial={false}>
                           {isExpanded && (
@@ -1495,35 +1762,100 @@ export default function LiquidityPage() {
                                   </div>
                                 </div>
 
-                                {/* 2. Active Price Bounds and range visualization */}
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
-                                  <div className={`p-4 rounded-xl border text-center ${isDark ? "bg-[#1B2236]/20 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
-                                    <p className={`text-xs font-bold uppercase ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Min Price</p>
-                                    <p className="text-xl font-bold mt-1">{pos.tickLower}</p>
-                                    <p className={`text-xs font-mono mt-1 ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Lower Tick Bound</p>
-                                  </div>
+                                 {/* 2. Active Price Bounds and range visualization */}
+                                 <div className="space-y-4">
+                                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+                                     <div className={`p-4 rounded-xl border text-center ${isDark ? "bg-[#1B2236]/20 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
+                                       <p className={`text-xs font-bold uppercase ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Min Price</p>
+                                       <p className="text-xl font-bold mt-1 font-mono">
+                                         {pos.tickLower <= -887200 ? "0" : tickToPrice(pos.tickLower, pos.token0Info.decimals, pos.token1Info.decimals, true).toFixed(4)}
+                                       </p>
+                                       <p className={`text-xs font-mono mt-1 ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Lower Tick: {pos.tickLower}</p>
+                                     </div>
 
-                                  <div className="text-center py-2">
-                                    <div className={`text-sm font-semibold mb-1 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
-                                      Pool address
-                                    </div>
-                                    <a
-                                      href={`https://testnet.mstscan.com/address/${pos.poolAddress}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className={`text-sm font-mono hover:underline flex items-center justify-center gap-1.5 ${isDark ? "text-cyan-400" : "text-cyan-600"}`}
-                                    >
-                                      {pos.poolAddress.slice(0, 8)}...{pos.poolAddress.slice(-6)}
-                                      <ExternalLink size={12} />
-                                    </a>
-                                  </div>
+                                     <div className="text-center py-2">
+                                       <div className={`text-sm font-semibold mb-1 ${isDark ? "text-zinc-400" : "text-zinc-600"}`}>
+                                         Pool address
+                                       </div>
+                                       <a
+                                         href={`https://testnet.mstscan.com/address/${pos.poolAddress}`}
+                                         target="_blank"
+                                         rel="noreferrer"
+                                         className={`text-sm font-mono hover:underline flex items-center justify-center gap-1.5 ${isDark ? "text-cyan-400" : "text-cyan-600"}`}
+                                       >
+                                         {pos.poolAddress.slice(0, 8)}...{pos.poolAddress.slice(-6)}
+                                         <ExternalLink size={12} />
+                                       </a>
+                                     </div>
 
-                                  <div className={`p-4 rounded-xl border text-center ${isDark ? "bg-[#1B2236]/20 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
-                                    <p className={`text-xs font-bold uppercase ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Max Price</p>
-                                    <p className="text-xl font-bold mt-1">{pos.tickUpper}</p>
-                                    <p className={`text-xs font-mono mt-1 ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Upper Tick Bound</p>
-                                  </div>
-                                </div>
+                                     <div className={`p-4 rounded-xl border text-center ${isDark ? "bg-[#1B2236]/20 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
+                                       <p className={`text-xs font-bold uppercase ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Max Price</p>
+                                       <p className="text-xl font-bold mt-1 font-mono">
+                                         {pos.tickUpper >= 887200 ? "∞" : tickToPrice(pos.tickUpper, pos.token0Info.decimals, pos.token1Info.decimals, true).toFixed(4)}
+                                       </p>
+                                       <p className={`text-xs font-mono mt-1 ${isDark ? "text-zinc-550" : "text-zinc-400"}`}>Upper Tick: {pos.tickUpper}</p>
+                                     </div>
+                                   </div>
+
+                                   {/* Range Visualization for active position */}
+                                   <div className={`p-4.5 rounded-2xl border backdrop-blur-sm space-y-2
+                                     ${isDark ? "bg-[#131A2A]/25 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
+                                     <div className="flex justify-between items-center text-[10px] text-zinc-550 font-black uppercase tracking-wider">
+                                       <span>Min Price</span>
+                                       <span className="text-cyan-400 font-bold">Current Pool Price</span>
+                                       <span>Max Price</span>
+                                     </div>
+                                     {(() => {
+                                       const rawPrice = Number(pos.poolSqrtPriceX96) / (2 ** 96);
+                                       const ratioSquared = rawPrice * rawPrice;
+                                       const posCurrentPrice = ratioSquared * Math.pow(10, pos.token0Info.decimals - pos.token1Info.decimals);
+                                       const posPriceLower = pos.tickLower <= -887200 ? 0 : tickToPrice(pos.tickLower, pos.token0Info.decimals, pos.token1Info.decimals, true);
+                                       const posPriceUpper = pos.tickUpper >= 887200 ? Infinity : tickToPrice(pos.tickUpper, pos.token0Info.decimals, pos.token1Info.decimals, true);
+
+                                       const minBound = posCurrentPrice * 0.1;
+                                       const maxBound = posCurrentPrice * 3.0;
+
+                                       const getPercentage = (price: number) => {
+                                         if (price <= minBound) return 0;
+                                         if (price >= maxBound) return 100;
+                                         return ((price - minBound) / (maxBound - minBound)) * 100;
+                                       };
+
+                                       const leftPercent = getPercentage(posPriceLower);
+                                       const rightPercent = getPercentage(posPriceUpper);
+                                       const widthPercent = Math.max(1.5, rightPercent - leftPercent);
+                                       const currentPercent = getPercentage(posCurrentPrice);
+
+                                       return (
+                                         <>
+                                           <div className="relative h-2 w-full rounded-full overflow-hidden bg-zinc-800">
+                                             <div
+                                               className={`absolute h-full rounded-full transition-all duration-300 ${
+                                                 pos.isInRange
+                                                   ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                                   : "bg-gradient-to-r from-amber-500 to-orange-400"
+                                               }`}
+                                               style={{
+                                                 left: `${leftPercent}%`,
+                                                 width: `${widthPercent}%`,
+                                               }}
+                                             />
+                                             <div
+                                               className="absolute top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] z-10"
+                                               style={{ left: `${currentPercent}%` }}
+                                             />
+                                           </div>
+                                           <div className="flex justify-between items-center text-xs font-bold font-mono">
+                                             <span className="text-zinc-400">{pos.tickLower <= -887200 ? "0" : posPriceLower.toFixed(4)}</span>
+                                             <span className="text-cyan-400">{posCurrentPrice.toFixed(4)}</span>
+                                             <span className="text-zinc-400">{pos.tickUpper >= 887200 ? "∞" : posPriceUpper.toFixed(4)}</span>
+                                           </div>
+                                         </>
+                                       );
+                                     })()}
+                                   </div>
+                                 </div>
+
 
                                 {/* 3. Inner Actions Layout (Add, Remove and Collect side-by-side/stacked) */}
                                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-4 border-t border-[#2C364F]/20">
@@ -1754,7 +2086,9 @@ export default function LiquidityPage() {
                 <span className={`text-xs font-bold uppercase tracking-wider ${isDark ? "text-cyan-400" : "text-cyan-600"}`}>
                   Step-by-Step wizard
                 </span>
-                <h2 className="text-3xl font-black">Create Pool & Initialize</h2>
+                <h2 className="text-3xl font-black">
+                  {creationMode === "existing" ? "Add Liquidity to Pool" : "Create Pool & Initialize"}
+                </h2>
               </div>
             </div>
 
@@ -1771,52 +2105,104 @@ export default function LiquidityPage() {
                   : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
               }}
             >
-
               <div className="relative z-10 space-y-6">
-
-
-                {/* 1. Fee Tier Selector */}
+                {/* Pool Fee Tier */}
                 <div>
                   <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
                     Pool Fee Tier
                   </label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[500, 3000, 10000].map((fee) => (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {[
+                      { fee: 500, label: "0.05%", desc: "Best for very stable pairs", vol: "12% vol" },
+                      { fee: 3000, label: "0.30%", desc: "Best for most pairs", vol: "83% vol" },
+                      { fee: 10000, label: "1.00%", desc: "Best for exotic/volatile pairs", vol: "5% vol" }
+                    ].map((item) => (
                       <button
-                        key={fee}
+                        key={item.fee}
                         type="button"
-                        onClick={() => handleFeeTierChange(fee)}
-                        className={`py-3 px-3.5 rounded-xl border text-sm font-bold transition-all flex flex-col items-center justify-center gap-0.5
-                          ${initFee === fee
-                            ? isDark ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-md" : "bg-cyan-500/15 border-cyan-500/35 text-cyan-700 shadow-sm"
-                            : isDark ? "bg-[#1B2236]/40 border-[#2C364F]/25 text-zinc-400 hover:border-[#2C364F]/50" : "bg-zinc-50 border-zinc-200 text-zinc-600 hover:border-zinc-300"
+                        onClick={() => handleFeeTierChange(item.fee)}
+                        className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between gap-3 relative overflow-hidden backdrop-blur-md
+                          ${initFee === item.fee
+                            ? isDark
+                              ? "bg-cyan-500/10 border-cyan-500/50 text-white shadow-lg shadow-cyan-500/5"
+                              : "bg-cyan-500/10 border-cyan-500/40 text-zinc-950 shadow-md"
+                            : isDark
+                              ? "bg-[#131A2A]/40 border-[#2C364F]/30 text-zinc-400 hover:border-[#2C364F]/60"
+                              : "bg-white border-zinc-200 text-zinc-650 hover:border-zinc-300"
                           }`}
                       >
-                        <span className="text-base font-black">{(fee / 10000).toFixed(2)}%</span>
-                        <span className="text-xs font-normal opacity-75">
-                          {fee === 3000 ? "Typical" : fee === 500 ? "Stable" : "Exotic"}
-                        </span>
+                        {initFee === item.fee && (
+                          <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-cyan-500/20 to-transparent rounded-full blur-md" />
+                        )}
+                        <div className="flex justify-between items-center w-full">
+                          <span className="text-xl font-black">{item.label}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase
+                            ${initFee === item.fee
+                              ? "bg-cyan-400/25 text-cyan-400"
+                              : isDark ? "bg-[#1E2538] text-zinc-400" : "bg-zinc-100 text-zinc-550"
+                            }`}
+                          >
+                            {item.vol}
+                          </span>
+                        </div>
+                        <div>
+                          <p className={`text-xs font-semibold leading-relaxed ${initFee === item.fee ? "text-cyan-400/90" : "text-zinc-500"}`}>
+                            {item.desc}
+                          </p>
+                        </div>
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* 2. Token Inputs */}
+                {/* Info block */}
+                {tokenA_Symbol && tokenB_Symbol && (
+                  creationMode === "existing" && isPoolInitialized ? (
+                    <div className={`p-4.5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
+                      ${isDark ? "bg-[#1B2236]/30 border-emerald-500/25 text-zinc-400" : "bg-emerald-50/50 border-emerald-300/20 text-zinc-700"}`}>
+                      <Info size={20} className="text-emerald-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className={`font-bold mb-0.5 ${isDark ? "text-emerald-400" : "text-emerald-700"}`}>Pool has been created, you can add new position</p>
+                        This pool is initialized. The current rate is <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {poolCurrentPrice?.toFixed(4)} {tokenB_Symbol}</span>
+                        {quoterPrice !== null && (
+                          <span> (Quote price: <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {quoterPrice.toFixed(4)} {tokenB_Symbol}</span>)</span>
+                        )}. Input values are auto-aligned to guarantee all deposited funds are used.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={`p-4.5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
+                      ${isDark ? "bg-[#1B2236]/30 border-cyan-500/25 text-zinc-400" : "bg-cyan-50/50 border-cyan-300/20 text-zinc-700"}`}>
+                      <Info size={20} className="text-cyan-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className={`font-bold mb-0.5 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Create New Pool</p>
+                        Pool does not exist, you can create new pool. Set a starting price and deploy the pool.
+                      </div>
+                    </div>
+                  )
+                )}
+
+                {/* Deposit Amounts */}
                 <div className="space-y-4">
+                  <label className={`block text-base font-bold -mb-1 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                    Deposit Amounts
+                  </label>
+
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial {tokenA_Symbol} amount</label>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenA_Symbol || "Token A"} amount</label>
                       <span className="text-xs font-mono text-zinc-550">Bal: {wmstBalance}</span>
                     </div>
                     <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
-                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}`}
+                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
+                      ${isTokenInputDisabled(true) ? "opacity-50" : ""}`}
                     >
                       <input
+                        id="tokenA-amount-input"
                         type="text"
                         placeholder="0.0"
                         value={initWmst}
                         onChange={(e) => handleInitWmstChange(e.target.value)}
-                        disabled={isWorking}
+                        disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(true)}
                         className="w-full bg-transparent border-none outline-none text-base font-medium"
                       />
                       <button
@@ -1828,12 +2214,30 @@ export default function LiquidityPage() {
                             : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
                           }`}
                       >
-                        <TokenLogo symbol={tokenA_Symbol} size={20} />
-                        <span>{tokenA_Symbol}</span>
+                        {tokenA_Symbol ? (
+                          <>
+                            <TokenLogo symbol={tokenA_Symbol} size={20} />
+                            <span>{tokenA_Symbol}</span>
+                          </>
+                        ) : (
+                          <span className="text-zinc-400">Select Token</span>
+                        )}
                         <ChevronDown size={14} className="opacity-60" />
                       </button>
                     </div>
-                    {initWmst !== "" && (Number(initWmst) <= 0 || isNaN(Number(initWmst))) && (
+                    <div className="flex justify-between items-center mt-1.5">
+                      {tokenA_Symbol && (
+                        <span className="text-xs text-zinc-500 font-medium">
+                          USD Value: <span className="font-bold text-zinc-400 font-mono">${(Number(initWmst) * getTokenPrice(tokenA_Symbol)).toFixed(2)}</span>
+                        </span>
+                      )}
+                      {quoterAmountB && (
+                        <span className={`text-xs font-medium ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+                          Equivalent swap value: <span className="font-bold text-cyan-400">{quoterAmountB} {tokenB_Symbol}</span> via Quoter
+                        </span>
+                      )}
+                    </div>
+                    {tokenA_Symbol && initWmst !== "" && (Number(initWmst) <= 0 || isNaN(Number(initWmst))) && (
                       <span className="text-xs text-red-500 mt-1.5 block font-semibold">
                         {tokenA_Symbol} amount must be a positive number.
                       </span>
@@ -1842,18 +2246,20 @@ export default function LiquidityPage() {
 
                   <div>
                     <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>Initial {tokenB_Symbol} amount</label>
+                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenB_Symbol || "Token B"} amount</label>
                       <span className="text-xs font-mono text-zinc-550">Bal: {usdcBalance}</span>
                     </div>
                     <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
-                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}`}
+                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
+                      ${isTokenInputDisabled(false) ? "opacity-50" : ""}`}
                     >
                       <input
+                        id="tokenB-amount-input"
                         type="text"
                         placeholder="0.0"
                         value={initUsdc}
                         onChange={(e) => handleInitUsdcChange(e.target.value)}
-                        disabled={isWorking}
+                        disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(false)}
                         className="w-full bg-transparent border-none outline-none text-base font-medium"
                       />
                       <button
@@ -1865,12 +2271,30 @@ export default function LiquidityPage() {
                             : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
                           }`}
                       >
-                        <TokenLogo symbol={tokenB_Symbol} size={20} />
-                        <span>{tokenB_Symbol}</span>
+                        {tokenB_Symbol ? (
+                          <>
+                            <TokenLogo symbol={tokenB_Symbol} size={20} />
+                            <span>{tokenB_Symbol}</span>
+                          </>
+                        ) : (
+                          <span className="text-zinc-400">Select Token</span>
+                        )}
                         <ChevronDown size={14} className="opacity-60" />
                       </button>
                     </div>
-                    {initUsdc !== "" && (Number(initUsdc) <= 0 || isNaN(Number(initUsdc))) && (
+                    <div className="flex justify-between items-center mt-1.5">
+                      {tokenB_Symbol && (
+                        <span className="text-xs text-zinc-500 font-medium">
+                          USD Value: <span className="font-bold text-zinc-400 font-mono">${(Number(initUsdc) * getTokenPrice(tokenB_Symbol)).toFixed(2)}</span>
+                        </span>
+                      )}
+                      {quoterAmountA && (
+                        <span className={`text-xs font-medium ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+                          Equivalent swap value: <span className="font-bold text-cyan-400">{quoterAmountA} {tokenA_Symbol}</span> via Quoter
+                        </span>
+                      )}
+                    </div>
+                    {tokenB_Symbol && initUsdc !== "" && (Number(initUsdc) <= 0 || isNaN(Number(initUsdc))) && (
                       <span className="text-xs text-red-500 mt-1.5 block font-semibold">
                         {tokenB_Symbol} amount must be a positive number.
                       </span>
@@ -1878,79 +2302,214 @@ export default function LiquidityPage() {
                   </div>
                 </div>
 
-                {creationMode === "new" && initWmst && initUsdc && !isNaN(Number(initWmst)) && !isNaN(Number(initUsdc)) && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
+                {creationMode === "new" && tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && !isNaN(Number(initWmst)) && !isNaN(Number(initUsdc)) && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
                   <div className={`p-4 rounded-xl border flex items-center justify-between text-sm backdrop-blur-sm
                     ${isDark ? "bg-[#1B2236]/35 border-[#2C364F]/30 text-zinc-350" : "bg-zinc-50 border-zinc-200 text-zinc-700"}`}>
                     <span className="font-semibold text-zinc-400">Calculated Starting Price:</span>
                     <span className="font-mono font-bold text-cyan-400">
-                      1 WMST = {(Number(initUsdc) / Number(initWmst)).toFixed(4)} USDC
+                      1 {tokenA_Symbol} = {(Number(initUsdc) / Number(initWmst)).toFixed(4)} {tokenB_Symbol}
                     </span>
                   </div>
                 )}
 
-                {/* 3. Ticks boundaries (Centered Concentrated bounds) */}
-                <div>
-                  <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
-                    Price Range boundaries
-                  </label>
+                {/* Price Range boundaries */}
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <label className={`text-base font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                      Price Range boundaries
+                    </label>
+                    
+                    {/* Range Mode Switch */}
+                    <div className={`flex rounded-xl p-0.5 border backdrop-blur-md transition-all
+                      ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200"}`}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRangeMode("custom");
+                          setRangeStrategy("stable");
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                          ${rangeMode === "custom"
+                            ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
+                            : "text-zinc-400 hover:text-zinc-200"}`}
+                      >
+                        Custom Range
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRangeMode("full");
+                          setRangeStrategy("full");
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                          ${rangeMode === "full"
+                            ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
+                            : "text-zinc-400 hover:text-zinc-200"}`}
+                      >
+                        Full Range
+                      </button>
+                    </div>
+                  </div>
+
+                  {rangeMode === "custom" && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setRangeStrategy("stable")}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
+                          ${rangeStrategy === "stable"
+                            ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
+                            : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-500 hover:text-zinc-700"
+                          }`}
+                      >
+                        Stable Preset (±3 ticks)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRangeStrategy("wide")}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
+                          ${rangeStrategy === "wide"
+                            ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
+                            : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-500 hover:text-zinc-700"
+                          }`}
+                      >
+                        Wide Preset (-50% to +100%)
+                      </button>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <input
-                        type="number"
-                        value={initTickLower}
-                        onChange={(e) => setInitTickLower(e.target.value)}
-                        disabled={isWorking}
-                        className={`w-full py-3.5 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
-                          ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
-                      />
-                      <span className="text-xs text-zinc-550 mt-1.5 block">Lower Tick limit</span>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={rangeMode === "full" ? "0" : priceLower}
+                          onChange={(e) => handlePriceLowerChange(e.target.value)}
+                          onBlur={handlePriceLowerBlur}
+                          disabled={isWorking || rangeMode === "full"}
+                          className={`w-full py-3 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
+                            ${isDark
+                              ? "border-[#2C364F]/50 focus:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
+                              : "border-zinc-300 focus:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
+                        />
+                        {rangeMode !== "full" && (
+                          <span className="absolute right-3 top-3.5 text-[10px] font-bold text-zinc-500">
+                            USDC/WMST
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex justify-between items-center mt-1.5 px-1">
+                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Min Price</span>
+                        <span className={`text-[10px] font-black ${Number(getDeviationLabel(true).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                          {getDeviationLabel(true)}
+                        </span>
+                      </div>
                     </div>
 
                     <div>
-                      <input
-                        type="number"
-                        value={initTickUpper}
-                        onChange={(e) => setInitTickUpper(e.target.value)}
-                        disabled={isWorking}
-                        className={`w-full py-3.5 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
-                          ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
-                      />
-                      <span className="text-xs text-zinc-550 mt-1.5 block">Upper Tick limit</span>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={rangeMode === "full" ? "Infinity" : priceUpper}
+                          onChange={(e) => handlePriceUpperChange(e.target.value)}
+                          onBlur={handlePriceUpperBlur}
+                          disabled={isWorking || rangeMode === "full"}
+                          className={`w-full py-3 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
+                            ${isDark
+                              ? "border-[#2C364F]/50 focus:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
+                              : "border-zinc-300 focus:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
+                        />
+                        {rangeMode !== "full" && (
+                          <span className="absolute right-3 top-3.5 text-[10px] font-bold text-zinc-500">
+                            USDC/WMST
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex justify-between items-center mt-1.5 px-1">
+                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Max Price</span>
+                        <span className={`text-[10px] font-black ${Number(getDeviationLabel(false).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                          {getDeviationLabel(false)}
+                        </span>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Range Bar */}
+                  {(() => {
+                    const currentPriceVal = poolCurrentPrice || 1.0;
+                    const pLower = rangeMode === "full" ? 0 : Number(priceLower) || 0;
+                    const pUpper = rangeMode === "full" ? Infinity : Number(priceUpper) || Infinity;
+                    const isInRange = currentPriceVal >= pLower && currentPriceVal <= pUpper;
+
+                    const minBound = currentPriceVal * 0.1;
+                    const maxBound = currentPriceVal * 3.0;
+
+                    const getPercentage = (price) => {
+                      if (price <= minBound) return 0;
+                      if (price >= maxBound) return 100;
+                      return ((price - minBound) / (maxBound - minBound)) * 100;
+                    };
+
+                    const leftPercent = getPercentage(pLower);
+                    const rightPercent = getPercentage(pUpper);
+                    const widthPercent = Math.max(1.5, rightPercent - leftPercent);
+                    const currentPercent = getPercentage(currentPriceVal);
+
+                    return (
+                      <div className={`p-4.5 rounded-2xl border backdrop-blur-sm space-y-2
+                        ${isDark ? "bg-[#131A2A]/25 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
+                        <div className="flex justify-between items-center text-[10px] text-zinc-550 font-black uppercase tracking-wider">
+                          <span>Min Price</span>
+                          <span className="text-cyan-400 font-bold">Current Price</span>
+                          <span>Max Price</span>
+                        </div>
+                        <div className="relative h-2 w-full rounded-full overflow-hidden bg-zinc-800">
+                          <div
+                            className={`absolute h-full rounded-full transition-all duration-300 ${
+                              isInRange
+                                ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                : "bg-gradient-to-r from-amber-500 to-orange-400"
+                            }`}
+                            style={{
+                              left: `${leftPercent}%`,
+                              width: `${widthPercent}%`,
+                            }}
+                          />
+                          <div
+                            className="absolute top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] z-10"
+                            style={{ left: `${currentPercent}%` }}
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-xs font-bold font-mono">
+                          <span className="text-zinc-400">{rangeMode === "full" ? "0" : pLower.toFixed(4)}</span>
+                          <span className="text-cyan-400">{currentPriceVal.toFixed(4)}</span>
+                          <span className="text-zinc-400">{rangeMode === "full" ? "∞" : pUpper.toFixed(4)}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Fee & APR Estimation Panel */}
+                  {tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
+                    <div className={`p-4 rounded-2xl border grid grid-cols-2 gap-4 backdrop-blur-sm
+                      ${isDark ? "bg-[#1B2236]/25 border-cyan-500/20" : "bg-cyan-50/20 border-cyan-200"}`}>
+                      <div>
+                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Estimated APR</span>
+                        <span className="text-xl font-black text-emerald-400 font-mono">
+                          {getEstimatedLiquidityAndAPR().apr.toFixed(2)}%
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Est. 24h Earnings</span>
+                        <span className="text-xl font-black text-cyan-400 font-mono">
+                          ${getEstimatedLiquidityAndAPR().dailyFee.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {/* Info block */}
-                {creationMode === "new" ? (
-                  <div className={`p-4.5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
-                    ${isDark ? "bg-[#1B2236]/30 border-cyan-500/25 text-zinc-400" : "bg-cyan-50/50 border-cyan-300/20 text-zinc-700"}`}>
-                    <Info size={20} className="text-cyan-400 shrink-0 mt-0.5" />
-                    <div>
-                      <p className={`font-bold mb-0.5 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Deploying Pool</p>
-                      This will submit the pool creation and initialization transaction on-chain using your inputs as the starting price ratio.
-                    </div>
-                  </div>
-                ) : (
-                  isPoolInitialized ? (
-                    <div className={`p-4.5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
-                      ${isDark ? "bg-[#1B2236]/30 border-emerald-500/25 text-zinc-400" : "bg-emerald-50/50 border-emerald-300/20 text-zinc-700"}`}>
-                      <Info size={20} className="text-emerald-500 shrink-0 mt-0.5" />
-                      <div>
-                        <p className={`font-bold mb-0.5 ${isDark ? "text-emerald-400" : "text-emerald-700"}`}>Depositing to Active Pool</p>
-                        This pool is initialized. The current rate is <span className="font-mono font-bold text-cyan-400">1 WMST = {poolCurrentPrice?.toFixed(4)} USDC</span>. Input values are auto-aligned to guarantee all deposited funds are used.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={`p-4.5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
-                      ${isDark ? "bg-[#1B2236]/30 border-amber-500/25 text-zinc-400" : "bg-amber-50/50 border-amber-300/20 text-zinc-700"}`}>
-                      <Info size={20} className="text-amber-500 shrink-0 mt-0.5" />
-                      <div>
-                        <p className={`font-bold mb-0.5 ${isDark ? "text-amber-400" : "text-amber-700"}`}>Pool Not Initialized Yet</p>
-                        This pool does not exist on-chain. To initialize the starting price first, switch to the <span className="font-bold text-cyan-400">"Create Brand New Pool"</span> tab.
-                      </div>
-                    </div>
-                  )
-                )}
+
 
                 <button
                   onClick={() => {
@@ -1959,6 +2518,8 @@ export default function LiquidityPage() {
                   }}
                   disabled={
                     isWorking ||
+                    !tokenA_Symbol ||
+                    !tokenB_Symbol ||
                     !initWmst ||
                     !initUsdc ||
                     Number(initWmst) <= 0 ||
@@ -1967,6 +2528,8 @@ export default function LiquidityPage() {
                   }
                   className={`w-full py-4.5 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
                     ${isWorking ||
+                      !tokenA_Symbol ||
+                      !tokenB_Symbol ||
                       !initWmst ||
                       !initUsdc ||
                       Number(initWmst) <= 0 ||
@@ -1978,9 +2541,11 @@ export default function LiquidityPage() {
                         : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white shadow-lg shadow-blue-500/10"
                     }`}
                 >
-                  {isWorking
-                    ? creationMode === "new" ? "Initializing Pool..." : "Adding Position..."
-                    : creationMode === "new" ? "Initialize & Deploy" : "Add Position"
+                  {!tokenA_Symbol || !tokenB_Symbol
+                    ? "Select Tokens to Continue"
+                    : isWorking
+                      ? creationMode === "new" ? "Creating Pool..." : "Adding Position..."
+                      : creationMode === "new" ? "Create Pool" : "Add Position"
                   }
                 </button>
               </div>
@@ -2092,7 +2657,9 @@ export default function LiquidityPage() {
                       ${isDark ? "bg-[#1B2236]/30 border-[#2C364F]/50" : "bg-zinc-50 border-zinc-200"}`}>
                       <div className="flex justify-between items-center">
                         <span className="text-zinc-500">Action</span>
-                        <span className="font-bold text-cyan-500">Create Pool & Add Liquidity</span>
+                        <span className="font-bold text-cyan-500">
+                          {creationMode === "existing" ? "Add Liquidity" : "Create Pool & Add Liquidity"}
+                        </span>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-zinc-500">{tokenA_Symbol} Amount</span>
