@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useThemeStore } from "../../store/themeStore";
 
-const HEX_SYMBOLS = ["ETH", "WMSTCS", "SOL", "ARB", "MSTC", "AVAX", "OP", "LINK", "UNI", "AAVE"];
+const HEX_SYMBOLS = ["TMST", "WMSTCS", "OUSD", "WMST", "MSTC", "OUSD", "WMSTC", "WMST", "MSTC", "TMST"];
 
 interface Node {
     bx: number; by: number; x: number; y: number;

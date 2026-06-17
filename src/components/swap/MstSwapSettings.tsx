@@ -85,7 +85,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: -10 }}
           transition={{ duration: 0.15, ease: "easeOut" }}
-          className={`absolute right-0 top-11 w-80 p-5 rounded-[24px] border shadow-2xl z-40
+          className={`absolute right-0 top-11 w-[340px] p-5 rounded-[24px] border shadow-2xl z-40
             ${
               isDark
                 ? "bg-[#131A2A] border-[#2C364F] text-white"
@@ -104,7 +104,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
               <HelpCircle size={15} className="opacity-40 cursor-help" />
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               <button
                 onClick={handleAuto}
                 className={`flex-1 py-2 px-3 rounded-[12px] font-bold text-sm border transition-all duration-150
@@ -125,7 +125,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                   <button
                     key={val}
                     onClick={() => handlePreset(val)}
-                    className={`py-2 px-3.5 rounded-[12px] font-bold text-sm border transition-all duration-150
+                    className={`py-2 px-2.5 rounded-[12px] font-bold text-sm border transition-all duration-150
                       ${
                         isSelected
                           ? "bg-[#FB118E] border-[#FB118E] text-white"
@@ -139,13 +139,13 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                 );
               })}
 
-              <div className="relative w-20 flex items-center">
+              <div className="relative w-16 flex items-center">
                 <input
                   type="text"
                   placeholder={isAuto ? "0.50" : slippagePercent}
                   value={customVal}
                   onChange={(e) => handleCustomChange(e.target.value)}
-                  className={`w-full py-2 pl-2.5 pr-6 rounded-[12px] outline-none text-sm font-bold text-right border transition-all duration-150
+                  className={`w-full py-2 pl-2 pr-5 rounded-[12px] outline-none text-sm font-bold text-right border transition-all duration-150
                     ${
                       !isAuto && customVal !== ""
                         ? "border-[#FB118E] text-[#FB118E] bg-transparent"
@@ -154,7 +154,7 @@ export const MstSwapSettings: React.FC<MstSwapSettingsProps> = ({
                         : "bg-[#F5F6FC] border-zinc-200 text-zinc-800 placeholder-zinc-400"
                     }`}
                 />
-                <span className="absolute right-2.5 text-sm font-bold opacity-45 pointer-events-none">
+                <span className="absolute right-2 text-sm font-bold opacity-45 pointer-events-none">
                   %
                 </span>
               </div>

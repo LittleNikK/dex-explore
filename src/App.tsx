@@ -77,7 +77,8 @@ function Navigation() {
   };
 
   const links: Array<{ to?: string; label: string; subLinks?: { to: string; label: string }[] }> = [
-    { to: "/", label: "Swap" },
+    { to: "/", label: "Home" },
+    { to: "/swap", label: "Swap" },
     { to: "/explore", label: "Explore" },
     {
       label: "Pool",
@@ -147,9 +148,7 @@ function Navigation() {
                 );
               }
 
-              const isActive = link.to === "/"
-                ? location.pathname === "/" || location.pathname === "/swap"
-                : location.pathname === link.to;
+              const isActive = location.pathname === link.to;
               return (
                 <Link
                   key={link.to!}
@@ -308,9 +307,7 @@ function Navigation() {
                   );
                 }
 
-                const isActive = link.to === "/"
-                  ? location.pathname === "/" || location.pathname === "/swap"
-                  : location.pathname === link.to;
+                const isActive = location.pathname === link.to;
                 return (
                   <Link
                     key={link.to!}

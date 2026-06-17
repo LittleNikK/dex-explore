@@ -54,9 +54,9 @@ export function activityLabel(type: PortfolioActivityType) {
 }
 
 export function positionStatusTone(status: PortfolioPositionStatus) {
-  return status === "In Range"
-    ? "bg-success/15 text-success border-success/20"
-    : "bg-warning/15 text-warning border-warning/20";
+  if (status === "In Range") return "bg-success/15 text-success border-success/20";
+  if (status === "Closed") return "bg-muted text-muted-foreground border-border";
+  return "bg-warning/15 text-warning border-warning/20";
 }
 
 export function activityStatusTone(status: "confirmed" | "pending" | "failed") {

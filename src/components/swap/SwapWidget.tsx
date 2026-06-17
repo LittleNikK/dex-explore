@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
 import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
+import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, swapEventAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
 import { swapService } from "../../services/swap.service";
 import { mstChain } from "../../config/chains";
 import { useSwapStore } from "../../store/swapStore";
@@ -602,6 +602,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             description: `Successfully wrapped ${amountIn} MST to WMST. Ready for next step.`,
             txHash: hash
           });
+          setRefreshTrigger((prev) => prev + 1);
         }
       }
 
@@ -627,6 +628,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           description: `Allowed SwapRouter to spend ${amountIn} ${tokenSymbol}. Ready for next step.`,
           txHash: hash
         });
+        setRefreshTrigger((prev) => prev + 1);
       }
 
       else if (activeStep.id === "swap") {
@@ -685,22 +687,6 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             args: [swapInAddress, swapOutAddress, V3_FEE]
           }) as string;
 
-          const SWAP_EVENT_ABI = [
-            {
-              type: "event",
-              name: "Swap",
-              inputs: [
-                { indexed: true, name: "sender", type: "address" },
-                { indexed: true, name: "recipient", type: "address" },
-                { indexed: false, name: "amount0", type: "int256" },
-                { indexed: false, name: "amount1", type: "int256" },
-                { indexed: false, name: "sqrtPriceX96", type: "uint160" },
-                { indexed: false, name: "liquidity", type: "uint128" },
-                { indexed: false, name: "tick", type: "int24" }
-              ]
-            }
-          ] as const;
-
           let rawAmountIn = amountRaw.toString();
           let rawAmountOut = estimatedOut.toString();
 
@@ -708,7 +694,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             for (const log of receipt.logs) {
               try {
                 const decoded = decodeEventLog({
-                  abi: SWAP_EVENT_ABI,
+                  abi: swapEventAbi,
                   data: log.data,
                   topics: log.topics
                 });

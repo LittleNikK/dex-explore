@@ -23,9 +23,11 @@ function colorPair(seed: string) {
 }
 
 export function PortfolioHeader({ portfolio, ensName, walletAddress, isLoading, onRefresh }: PortfolioHeaderProps) {
-  const name = portfolio?.portfolioName ?? "Portfolio";
-  const walletLabel = portfolio?.walletLabel ?? "Wallet connected";
   const displayAddress = formatPortfolioAddress(walletAddress);
+  const isConnectedWallet = portfolio?.portfolioName === "Connected Wallet";
+  const name = isConnectedWallet ? displayAddress : (portfolio?.portfolioName ?? "Portfolio");
+  const subAddressLabel = isConnectedWallet ? "Connected Wallet" : displayAddress;
+  const walletLabel = portfolio?.walletLabel ?? "Wallet connected";
   const walletInitials = useMemo(() => displayAddress.replace(/[^a-zA-Z0-9]/g, "").slice(0, 2).toUpperCase(), [displayAddress]);
 
   return (
@@ -55,7 +57,7 @@ export function PortfolioHeader({ portfolio, ensName, walletAddress, isLoading, 
                 <Skeleton className="h-5 w-36 rounded-full" />
               ) : (
                 <>
-                  <span className="font-mono text-foreground">{displayAddress}</span>
+                  <span className={isConnectedWallet ? "font-medium text-foreground" : "font-mono text-foreground"}>{subAddressLabel}</span>
                   <span>•</span>
                   <span>{ensName ?? "ENS placeholder"}</span>
                   <span>•</span>

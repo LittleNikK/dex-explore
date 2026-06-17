@@ -6,7 +6,7 @@ export type PortfolioActivityType = "swap" | "send" | "receive" | "approve" | "b
 
 export type PortfolioActivityStatus = "confirmed" | "pending" | "failed";
 
-export type PortfolioPositionStatus = "In Range" | "Out Of Range";
+export type PortfolioPositionStatus = "In Range" | "Out Of Range" | "Closed";
 
 export interface PortfolioStats {
   totalAssets: number;

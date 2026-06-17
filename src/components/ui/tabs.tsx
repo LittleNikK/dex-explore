@@ -59,7 +59,7 @@ export function TabsTrigger({
       className={`${className || ""} transition-all duration-200 ${
         isActive
           ? "bg-cyan-500/10 text-cyan-400 font-semibold shadow-[0_8px_28px_-22px_rgba(34,211,238,0.7)]"
-          : "text-zinc-400 hover:text-white hover:bg-white/5"
+          : "text-muted-foreground hover:text-white hover:bg-white/5"
       }`}
       {...props}
     >

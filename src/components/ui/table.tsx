@@ -48,7 +48,7 @@ export function TableRow({ className, children, ...props }: React.HTMLAttributes
 export function TableHead({ className, children, ...props }: React.ThHTMLAttributes<HTMLTableCellElement>) {
   return (
     <th
-      className={`h-12 px-4 text-left align-middle font-medium text-zinc-400 [&:has([role=checkbox])]:pr-0 ${className || ""}`}
+      className={`h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 ${className || ""}`}
       {...props}
     >
       {children}

@@ -1,4 +1,4 @@
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/Skeleton";
 
 interface PortfolioMetricCardProps {
@@ -10,24 +10,32 @@ interface PortfolioMetricCardProps {
 }
 
 const toneClasses: Record<NonNullable<PortfolioMetricCardProps["tone"]>, string> = {
-  default: "text-foreground",
-  success: "text-success",
-  warning: "text-warning",
-  destructive: "text-destructive",
+  default: "text-foreground font-black",
+  success: "text-emerald-500 dark:text-emerald-400",
+  warning: "text-amber-500 dark:text-warning",
+  destructive: "text-rose-500 dark:text-destructive",
 };
 
 export function PortfolioMetricCard({ label, value, helper, loading, tone = "default" }: PortfolioMetricCardProps) {
   return (
-    <Card className="glass border-white/60 shadow-float">
-      <CardContent className="space-y-2 p-4">
-        <div className="text-sm font-bold uppercase tracking-[0.2em] text-muted-foreground">{label}</div>
+    <Card className="shadow-float overflow-hidden border-border/80">
+      <div className="p-6 flex flex-col justify-between space-y-4 h-full min-h-[135px]">
+        <div className="text-[11px] font-bold uppercase tracking-[0.15em] text-foreground/90 dark:text-white leading-none">
+          {label}
+        </div>
         {loading ? (
-          <Skeleton className="h-8 w-24 rounded-2xl" />
+          <Skeleton className="h-8 w-24 rounded-xl my-1" />
         ) : (
-          <div className={`text-2xl font-semibold tracking-tight ${toneClasses[tone]}`}>{value}</div>
+          <div className={`text-3xl font-extrabold tracking-tight leading-tight ${toneClasses[tone]}`}>
+            {value}
+          </div>
         )}
-        {helper ? <div className="text-xs text-muted-foreground">{helper}</div> : null}
-      </CardContent>
+        {helper ? (
+          <div className="text-xs text-foreground/80 dark:text-slate-200 font-normal leading-normal mt-auto">
+            {helper}
+          </div>
+        ) : null}
+      </div>
     </Card>
   );
 }

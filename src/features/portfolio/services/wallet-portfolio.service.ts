@@ -16,6 +16,30 @@ const txCache = new Map<string, any>();
 const blockCache = new Map<bigint, any>();
 const tokenMetaCache = new Map<string, { symbol: string; decimals: number }>();
 
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const curIndex = index++;
+      try {
+        results[curIndex] = await fn(items[curIndex]);
+      } catch (err) {
+        console.error(`Error in mapWithLimit at index ${curIndex}:`, err);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 async function getTokenMeta(publicClient: PublicClient, addr: string): Promise<{ symbol: string; decimals: number }> {
   const lowerAddr = addr.toLowerCase();
   const existing = TOKENS.find(t => t.symbol === "MST" ? false : t.address?.toLowerCase() === lowerAddr);
@@ -240,42 +264,49 @@ export async function getWalletPortfolioSnapshot({
     (async () => {
       try {
         const positionManager = getContractAddress("positionManager", targetChainId);
-        const [sentLogs, receivedLogs] = await Promise.all([
-          publicClient.getLogs({
-            address: positionManager,
-            event: erc721TransferEvent,
-            args: { from: address },
-            fromBlock: 2200000n,
-            toBlock: "latest"
-          }).catch(() => []),
-          publicClient.getLogs({
-            address: positionManager,
-            event: erc721TransferEvent,
-            args: { to: address },
-            fromBlock: 2200000n,
-            toBlock: "latest"
-          }).catch(() => [])
-        ]);
+        const npmBalance = (await publicClient.readContract({
+          address: positionManager,
+          abi: ABIS.positionManager,
+          functionName: "balanceOf",
+          args: [address]
+        }).catch(() => 0n)) as bigint;
 
-        const ownedTokenIds = new Set<string>();
-        for (const log of [...sentLogs, ...receivedLogs]) {
-          const { from, to, tokenId } = log.args;
-          if (!tokenId) continue;
-          const tokenIdStr = tokenId.toString();
-          if (to?.toLowerCase() === address.toLowerCase()) {
-            ownedTokenIds.add(tokenIdStr);
-          }
-          if (from?.toLowerCase() === address.toLowerCase()) {
-            ownedTokenIds.delete(tokenIdStr);
-          }
+        const ownedTokenIds: string[] = [];
+        if (npmBalance > 0n) {
+          const indices = Array.from({ length: Number(npmBalance) }, (_, i) => i);
+          const fetchedIds = await mapWithLimit(
+            indices,
+            3,
+            async (i) => {
+              try {
+                const tokenId = await publicClient.readContract({
+                  address: positionManager,
+                  abi: ABIS.positionManager,
+                  functionName: "tokenOfOwnerByIndex",
+                  args: [address, BigInt(i)]
+                }) as bigint;
+                return tokenId.toString();
+              } catch (err) {
+                console.error(`Error reading tokenOfOwnerByIndex at index ${i}:`, err);
+                return null;
+              }
+            }
+          );
+          fetchedIds.forEach((id) => {
+            if (id !== null) {
+              ownedTokenIds.push(id);
+            }
+          });
         }
 
-        const positionDetails = await Promise.all(
-          Array.from(ownedTokenIds).map(async (tokenIdStr) => {
+        const positionDetails = await mapWithLimit(
+          ownedTokenIds,
+          3,
+          async (tokenIdStr) => {
             try {
               const tokenId = BigInt(tokenIdStr);
               const pos = await publicClient.readContract({
-                address: getContractAddress("positionManager", targetChainId),
+                address: positionManager,
                 abi: ABIS.positionManager,
                 functionName: "positions",
                 args: [tokenId]
@@ -285,13 +316,13 @@ export async function getWalletPortfolioSnapshot({
               console.error(`Error reading position detail for tokenId ${tokenIdStr}:`, err);
               return null;
             }
-          })
+          }
         );
 
         return positionDetails.filter((p): p is { tokenIdStr: string; pos: any } => {
           if (!p) return false;
           const { pos } = p;
-          if (!pos || pos[7] === 0n) return false; // liquidity is at index 7
+          if (!pos) return false;
 
           const token0 = pos[2];
           const token1 = pos[3];
@@ -318,6 +349,12 @@ export async function getWalletPortfolioSnapshot({
   const wmstRaw = wmstBalanceIndex >= 0 ? (tokenBalances[wmstBalanceIndex] as { result?: unknown } | undefined) : undefined;
   const wmstBalanceRaw = typeof wmstRaw?.result === "bigint" ? wmstRaw.result : 0n;
   const wmstAmount = wmstToken ? safeNumber(wmstBalanceRaw, wmstToken.decimals) : 0;
+
+  const usdcToken = portfolioTokens.find((t) => t.symbol === "USDC");
+  const usdcBalanceIndex = portfolioTokens.findIndex((t) => t.symbol === "USDC");
+  const usdcRaw = usdcBalanceIndex >= 0 ? (tokenBalances[usdcBalanceIndex] as { result?: unknown } | undefined) : undefined;
+  const usdcBalanceRaw = typeof usdcRaw?.result === "bigint" ? usdcRaw.result : 0n;
+  const usdcAmount = usdcToken ? safeNumber(usdcBalanceRaw, usdcToken.decimals) : 0;
 
   const assets: PortfolioAsset[] = [];
 
@@ -399,7 +436,7 @@ export async function getWalletPortfolioSnapshot({
       liquidityUsd: lpLiquidityUsd,
       apr: 12.4,
       feesEarnedUsd: 0,
-      status: (poolTick >= tickLower && poolTick <= tickUpper) ? "In Range" : "Out Of Range",
+      status: liquidity === 0n ? "Closed" : ((poolTick >= tickLower && poolTick <= tickUpper) ? "In Range" : "Out Of Range"),
       hash: `0xpos-${tokenIdStr}`,
       reserves: {
         WMST: wmstReserve,
@@ -432,7 +469,7 @@ export async function getWalletPortfolioSnapshot({
   };
 
   try {
-    const fromBlock = 0n;
+    const fromBlock = 2200000n;
 
     const [sentLogs, receivedLogs, approvalLogs] = await Promise.all([
       publicClient.getLogs({
@@ -492,10 +529,12 @@ export async function getWalletPortfolioSnapshot({
       return { hash, logs, minBlock };
     }).sort((a, b) => b.minBlock - a.minBlock);
 
-    const latestTxHashes = logsList.slice(0, 500);
+    const latestTxHashes = logsList.slice(0, 10);
 
-    const parsedActivitiesRaw = await Promise.all(
-      latestTxHashes.map(async ({ hash, logs: txLogs }) => {
+    const parsedActivitiesRaw = await mapWithLimit(
+      latestTxHashes,
+      3,
+      async ({ hash, logs: txLogs }) => {
         try {
           const sends = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).from?.toLowerCase() === address.toLowerCase());
           const receives = txLogs.filter(l => l.eventName === "Transfer" && l.args && (l.args as any).to?.toLowerCase() === address.toLowerCase());
@@ -672,7 +711,7 @@ export async function getWalletPortfolioSnapshot({
           console.error(`Error parsing tx logs for hash ${hash}`, err);
           return null;
         }
-      })
+      }
     );
 
     parsedActivities.push(...parsedActivitiesRaw.filter((a): a is PortfolioActivity => a !== null));
@@ -748,14 +787,14 @@ export async function getWalletPortfolioSnapshot({
   const activity: PortfolioActivity[] = sortedActivities;
 
   const isNativeBalance = true;
-  const nativeSymbol = "WMST";
+  const nativeSymbol = "USDC";
 
   const portfolio: Portfolio = {
     address,
     portfolioName: "Connected Wallet",
     walletLabel: chainLabel(targetChainId),
     ensName: null,
-    valueUsd: wmstAmount,
+    valueUsd: usdcAmount,
     change24h: 0,
     networkCount: assetsValueUsd > 0 ? 1 : 0,
     assetCount: withAllocation.length,
@@ -798,7 +837,7 @@ export async function getWalletPortfolioSnapshot({
     positions,
     chartPoint: {
       time: Math.floor(Date.now() / 1000),
-      value: wmstAmount,
+      value: totalValueUsd,
     },
     balanceHistory,
   };

@@ -100,8 +100,8 @@ export function PortfolioValueChart({
               <AreaChart data={chartData} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="portfolioValueFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.34} />
-                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.02} />
+                    <stop offset="5%" stopColor="rgb(var(--primary))" stopOpacity={0.34} />
+                    <stop offset="95%" stopColor="rgb(var(--primary))" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid stroke="rgba(148,163,184,0.16)" strokeDasharray="3 3" vertical={false} />
@@ -111,11 +111,11 @@ export function PortfolioValueChart({
                 <Area
                   type="monotone"
                   dataKey="value"
-                  stroke="var(--primary)"
+                  stroke="rgb(var(--primary))"
                   strokeWidth={3}
                   fill="url(#portfolioValueFill)"
                   dot={false}
-                  activeDot={{ r: 5, fill: "var(--primary)", stroke: "white", strokeWidth: 2 }}
+                  activeDot={{ r: 5, fill: "rgb(var(--primary))", stroke: "white", strokeWidth: 2 }}
                 />
               </AreaChart>
             </ResponsiveContainer>

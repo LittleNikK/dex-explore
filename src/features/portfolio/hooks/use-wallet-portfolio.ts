@@ -39,8 +39,8 @@ export function useWalletPortfolio(address?: string, chainId?: number, enabled =
   const query = useQuery({
     queryKey: ["wallet-portfolio", address ?? "default", chainId ?? 91562037, refreshToken],
     enabled: enabled && Boolean(address) && Boolean(publicClient),
-    refetchInterval: 15_000,
-    staleTime: 10_000,
+    refetchInterval: 30_000,
+    staleTime: 25_000,
     gcTime: 5 * 60 * 1000,
     queryFn: async () => {
       if (!publicClient || !address) return null;
