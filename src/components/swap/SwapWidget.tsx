@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
 import { formatUnits, parseUnits, type Address, decodeEventLog, encodePacked } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, swapEventAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE, TOKENS } from "../../config/contracts";
+import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, swapEventAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE, TOKENS, NATIVE_TOKEN_SYMBOL } from "../../config/contracts";
 import { swapService } from "../../services/swap.service";
 import { mstChain } from "../../config/chains";
 import { useSwapStore } from "../../store/swapStore";
@@ -336,6 +336,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         return;
       }
 
+      if (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC") {
+        if (active) setSteps([]);
+        return;
+      }
+
       const amountRaw = parseUnits(amountIn, inputToken.decimals);
       const newSteps: SwapStep[] = [];
 
@@ -554,6 +559,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   // Handle Concentrated Pool Quotes
   useEffect(() => {
     if (!isReadyAmount || !publicClient || !inputToken || !outputToken) {
+      setQuotedOut(null);
+      setAmountOut("");
+      setBestRoute(null);
+      return;
+    }
+
+    if (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC") {
       setQuotedOut(null);
       setAmountOut("");
       setBestRoute(null);
@@ -1226,13 +1238,14 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const buttonLabel = useMemo(() => {
     if (!isConnected) return "Connect Wallet";
     if (chainId !== mstChain.id) return isSwitching ? "Switching Network..." : "Switch to MST Testnet";
+    if (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC") return "Swap Blocked";
     if (isWorking) return statusText || "Processing...";
     if (!amountIn || Number(amountIn) <= 0) return "Enter an amount";
     if (steps.length > 0) {
       return steps[0].label;
     }
     return "Confirm Swap";
-  }, [isConnected, chainId, isWorking, statusText, amountIn, isSwitching, steps]);
+  }, [isConnected, chainId, isWorking, statusText, amountIn, isSwitching, steps, tokenIn, tokenOut]);
 
   // Glow border tracking
   const handleInMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1544,7 +1557,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         <button
           ref={buttonMagneticRef}
           onClick={handleSwap}
-          disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0 || steps.length === 0))}
+          disabled={isWorking || isSwitching || (isConnected && (!amountIn || Number(amountIn) <= 0 || steps.length === 0)) || (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC")}
           className={`w-full mt-5 py-4.5 font-display font-bold text-lg tracking-wider transition-all duration-300 relative overflow-hidden group border-none shadow-none bg-transparent select-none outline-none
             ${!isConnected
               ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 active:scale-[0.98]"
@@ -1552,10 +1565,12 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
                 ? "text-zinc-500 dark:text-zinc-600 cursor-not-allowed"
                 : !amountIn || Number(amountIn) <= 0
                   ? "text-zinc-400 dark:text-zinc-700 cursor-not-allowed"
-                  : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-xl transition-all duration-300 active:scale-[0.98]"
+                  : (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC")
+                    ? "text-zinc-500 dark:text-zinc-600 cursor-not-allowed"
+                    : "text-[#FB118E] hover:text-cyan-600 dark:hover:text-cyan-400 font-extrabold text-xl transition-all duration-300 active:scale-[0.98]"
             }`}
           style={{
-            textShadow: (!isConnected || (!amountIn || Number(amountIn) <= 0) || isWorking)
+            textShadow: (!isConnected || (!amountIn || Number(amountIn) <= 0) || isWorking || (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC"))
               ? "none"
               : "0 0 10px rgba(251, 17, 142, 0.5), 0 0 20px rgba(0, 240, 255, 0.2)"
           }}
@@ -1570,12 +1585,17 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             </div>
           ) : (
             <div className="flex items-center justify-center gap-1.5">
-              {!amountIn || Number(amountIn) <= 0 ? null : <Sparkles size={16} className="text-cyan-300 group-hover:scale-125 transition-transform" />}
+              {!amountIn || Number(amountIn) <= 0 || (tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC") ? null : <Sparkles size={16} className="text-cyan-300 group-hover:scale-125 transition-transform" />}
               <span>{buttonLabel}</span>
             </div>
           )}
         </button>
 
+        {tokenIn === NATIVE_TOKEN_SYMBOL && tokenOut === "USDC" && (
+          <div className="mt-3 text-center text-xs font-semibold text-rose-500">
+            cannot swap from {displayTokenSymbol(tokenIn)} to {displayTokenSymbol(tokenOut)}
+          </div>
+        )}
 
       </motion.div>
 

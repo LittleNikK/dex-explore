@@ -27,6 +27,7 @@ interface MstTokenModalProps {
   onSelect: (token: string) => void;
   selectedToken: string;
   theme: "light" | "dark";
+  excludeTokens?: string[];
 }
 
 export const MstTokenModal: React.FC<MstTokenModalProps> = ({
@@ -35,8 +36,16 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
   onSelect,
   selectedToken,
   theme,
+  excludeTokens,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
+
+  const popularTokens = useMemo(() => {
+    if (excludeTokens && excludeTokens.length > 0) {
+      return POPULAR_TOKENS.filter((symbol) => !excludeTokens.includes(symbol));
+    }
+    return POPULAR_TOKENS;
+  }, [excludeTokens]);
 
   // Focus input when modal mounts
   useEffect(() => {
@@ -61,14 +70,18 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
 
   // Filter tokens
   const filteredTokens = useMemo(() => {
+    let tokens = ALL_TOKENS;
+    if (excludeTokens && excludeTokens.length > 0) {
+      tokens = tokens.filter((token) => !excludeTokens.includes(token.symbol));
+    }
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return ALL_TOKENS;
-    return ALL_TOKENS.filter(
+    if (!query) return tokens;
+    return tokens.filter(
       (token) =>
         token.symbol.toLowerCase().includes(query) ||
         token.name.toLowerCase().includes(query)
     );
-  }, [searchQuery]);
+  }, [searchQuery, excludeTokens]);
 
   const isDark = theme === "dark";
 
@@ -141,7 +154,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
             {/* Popular Tokens */}
             <div className="px-5 pb-4">
               <div className="flex flex-wrap gap-2">
-                {POPULAR_TOKENS.map((symbol) => {
+                {popularTokens.map((symbol) => {
                   const isSelected = selectedToken === symbol;
                   return (
                     <motion.button

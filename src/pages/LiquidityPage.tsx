@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, poolAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig } from "../config/contracts";
+import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, poolAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig, NATIVE_TOKEN_SYMBOL } from "../config/contracts";
 import { mstChain } from "../config/chains";
 import { TokenLogo } from "../components/swap/TokenLogos";
 import { MstTokenModal } from "../components/swap/MstTokenModal";
@@ -876,8 +876,56 @@ export default function LiquidityPage() {
           const tickLower = positionInfo[5] as number;
           const tickUpper = positionInfo[6] as number;
           const liquidity = positionInfo[7] as bigint;
-          const owed0 = positionInfo[10] as bigint;
-          const owed1 = positionInfo[11] as bigint;
+          let owed0 = positionInfo[10] as bigint;
+          let owed1 = positionInfo[11] as bigint;
+
+          try {
+            const collectResult = await publicClient.readContract({
+              address: CONTRACTS.positionManager,
+              abi: [
+                {
+                  type: "function",
+                  name: "collect",
+                  stateMutability: "view",
+                  inputs: [
+                    {
+                      name: "params",
+                      type: "tuple",
+                      components: [
+                        { name: "tokenId", type: "uint256" },
+                        { name: "recipient", type: "address" },
+                        { name: "amount0Max", type: "uint128" },
+                        { name: "amount1Max", type: "uint128" }
+                      ]
+                    }
+                  ],
+                  outputs: [
+                    { name: "amount0", type: "uint256" },
+                    { name: "amount1", type: "uint256" }
+                  ]
+                }
+              ],
+              functionName: "collect",
+              args: [
+                {
+                  tokenId: tokenId,
+                  recipient: address,
+                  amount0Max: 340282366920938463463374607431768211455n, // type(uint128).max
+                  amount1Max: 340282366920938463463374607431768211455n  // type(uint128).max
+                }
+              ],
+              account: address
+            }) as any;
+
+            if (collectResult) {
+              owed0 = collectResult[0];
+              owed1 = collectResult[1];
+            }
+          } catch (simErr) {
+            console.warn(`[Fee Estimation] Failed reading collect to fetch real-time fees for Token ID #${tokenId}:`, simErr);
+          }
+
+
 
           const t0Lower = token0.toLowerCase();
           const t1Lower = token1.toLowerCase();
@@ -3266,6 +3314,7 @@ export default function LiquidityPage() {
           onSelect={handleTokenSelect}
           selectedToken={modalOpen === "A" ? tokenA_Symbol : (modalOpen === "B" ? tokenB_Symbol : "")}
           theme={theme}
+          excludeTokens={[NATIVE_TOKEN_SYMBOL]}
         />
 
       </main>

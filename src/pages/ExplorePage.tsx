@@ -386,6 +386,20 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
   };
 
   const tokenList: Array<{ symbol: string; name: string; priceUsd: number; change24h: number; volume24h: number; tvl: number; address: string }> = backendTokens.map((t) => {
+    const match = backendMarketData.find(m => m.tokenAddress.toLowerCase() === t.tokenAddress.toLowerCase());
+
+    if (match) {
+      return {
+        symbol: t.symbol,
+        name: t.symbol === "USDC" ? "USD Coin" : (t.symbol === "WMST" ? "Wrapped MST" : t.symbol + " Native"),
+        priceUsd: Number(match.price) || 0,
+        change24h: Number(match.change24h) || 0,
+        volume24h: Number(match.volume24h) || 0,
+        tvl: Number(match.tvl) || 0,
+        address: t.tokenAddress
+      };
+    }
+
     const priceUsd = getPrice(t.tokenAddress, t.symbol);
     const priceAtStart = getTokenPriceAt(t.tokenAddress, rangeAgo, priceUsd);
     const changeRange = priceAtStart > 0 ? ((priceUsd - priceAtStart) / priceAtStart) * 100 : 0;
