@@ -70,9 +70,13 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       try {
         const wmstAddress = CONTRACTS.wmst;
         const usdcAddress = CONTRACTS.usdc;
+        const wmstToken = getToken("WMST");
+        const usdcToken = getToken("USDC");
+        const wmstDecimals = wmstToken?.decimals ?? 18;
+        const usdcDecimals = usdcToken?.decimals ?? 18;
         if (!wmstAddress || !usdcAddress) return;
 
-        const oneUnitRaw = parseUnits("1", 18);
+        const oneUnitRaw = parseUnits("1", wmstDecimals);
         const { result } = await c.simulateContract({
           address: CONTRACTS.quoterV2,
           abi: quoterV2Abi,
@@ -90,7 +94,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
 
         if (active && result) {
           const outRaw = result[0];
-          const price = Number(formatUnits(outRaw, 18));
+          const price = Number(formatUnits(outRaw, usdcDecimals));
           setLiveMstPrice(price);
         }
       } catch (err) {
@@ -201,7 +205,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       (tokenIn === "WMST" && tokenOut === "MST")
     ) {
       setAmountOut(amountIn);
-      setQuotedOut(parseUnits(amountIn, 18));
+      setQuotedOut(parseUnits(amountIn, outputToken?.decimals ?? 18));
       return;
     }
 
@@ -487,7 +491,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         // Step 2: Swap USDC to WMST
         setStatusText("[Step 2/3] Swapping USDC for WMST in wallet...");
         const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
-        const estimatedOut = quotedOut || parseUnits(amountOut, 18);
+        const estimatedOut = quotedOut || parseUnits(amountOut, outputToken?.decimals ?? 18);
         const amountOutMinimum = (estimatedOut * BigInt(10000 - slippageBps)) / 10000n;
 
         console.log("exactInputSingle (USDC -> MST):", {

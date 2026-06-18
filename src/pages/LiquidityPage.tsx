@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Info, Plus, Coins, HelpCircle, ExternalLink, ChevronDown, ChevronUp, ArrowLeft, ShieldCheck, Loader2, CheckCircle2, XCircle } from "lucide-react";
-import { formatUnits, parseUnits, type Address } from "viem";
+import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
 import { getToken, TOKENS, CONTRACTS, erc20Abi, quoterV2Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, poolAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, type TokenConfig } from "../config/contracts";
 import { mstChain } from "../config/chains";
@@ -10,6 +10,9 @@ import { TokenLogo } from "../components/swap/TokenLogos";
 import { MstTokenModal } from "../components/swap/MstTokenModal";
 import { useThemeStore } from "../store/themeStore";
 import { getAmountsForLiquidity, getOtherAmountForToken, tickToPrice, priceToTick } from "../utils/uniswap-math";
+import { poolService } from "../services/pool.service";
+import { liquidityService } from "../services/liquidity.service";
+import { lpPositionService } from "../services/lp-position.service";
 
 export interface PositionItem {
   tokenId: bigint;
@@ -196,6 +199,13 @@ export default function LiquidityPage() {
   const [poolCurrentPrice, setPoolCurrentPrice] = useState<number | null>(null);
   const [poolSqrtPriceX96, setPoolSqrtPriceX96] = useState<bigint | null>(null);
   const [creationMode, setCreationMode] = useState<"new" | "existing">("new");
+  const [wizardStep, setWizardStep] = useState<1 | 2>(1);
+
+  useEffect(() => {
+    if (currentView !== "create") {
+      setWizardStep(1);
+    }
+  }, [currentView]);
 
   const [quoterPrice, setQuoterPrice] = useState<number | null>(null);
   const [quoterAmountB, setQuoterAmountB] = useState<string>("");
@@ -1242,7 +1252,147 @@ export default function LiquidityPage() {
 
         setTxHash(mintHash);
         setStatusText("Waiting for position mint confirmation...");
-        await publicClient?.waitForTransactionReceipt({ hash: mintHash });
+        const receipt = await publicClient?.waitForTransactionReceipt({ hash: mintHash });
+
+        let tokenIdStr = "";
+        if (receipt && receipt.logs) {
+          for (const log of receipt.logs) {
+            try {
+              if (log.topics[0] === '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef') {
+                const decoded = decodeEventLog({
+                  abi: [
+                    {
+                      type: "event",
+                      name: "Transfer",
+                      inputs: [
+                        { indexed: true, name: "from", type: "address" },
+                        { indexed: true, name: "to", type: "address" },
+                        { indexed: true, name: "tokenId", type: "uint256" }
+                      ]
+                    }
+                  ],
+                  data: log.data,
+                  topics: log.topics
+                });
+                if (decoded.eventName === "Transfer" && decoded.args.tokenId !== undefined) {
+                  tokenIdStr = decoded.args.tokenId.toString();
+                  break;
+                }
+              }
+            } catch (e) {
+              // Ignore decoding errors
+            }
+          }
+        }
+
+        // Always try to register the pool in the backend database (and log initial/added liquidity)
+        try {
+          let actualPoolAddr = poolAddr;
+          if (!actualPoolAddr || actualPoolAddr === "0x0000000000000000000000000000000000000000") {
+            actualPoolAddr = await publicClient?.readContract({
+              address: CONTRACTS.factory,
+              abi: uniswapV3FactoryAbi,
+              functionName: "getPool",
+              args: [t0, t1, initFee]
+            }) as Address;
+          }
+
+          if (actualPoolAddr && actualPoolAddr !== "0x0000000000000000000000000000000000000000") {
+            const t0Lower = t0.toLowerCase();
+            const t1Lower = t1.toLowerCase();
+            const isT0Wmst = t0Lower === wmstToken.address?.toLowerCase();
+
+            // 1. Create pool in backend if it doesn't exist yet
+            try {
+              await poolService.createPool({
+                poolAddress: actualPoolAddr.toLowerCase(),
+                token0Address: t0Lower,
+                token1Address: t1Lower,
+                token0Symbol: isT0Wmst ? (tokenA_Symbol || "WMST") : (tokenB_Symbol || "USDC"),
+                token1Symbol: isT0Wmst ? (tokenB_Symbol || "USDC") : (tokenA_Symbol || "WMST"),
+                creatorWallet: address?.toLowerCase() || "",
+                txHash: mintHash.toLowerCase(),
+                chainId: chainId || mstChain.id,
+                feeTier: initFee,
+                token0Decimals: isT0Wmst ? wmstToken.decimals : usdcToken.decimals,
+                token1Decimals: isT0Wmst ? usdcToken.decimals : wmstToken.decimals,
+                token0InitialAmount: amount0.toString(),
+                token1InitialAmount: amount1.toString()
+              });
+              console.log("Registered pool in backend successfully:", actualPoolAddr);
+            } catch (poolErr) {
+              console.log("Pool already exists in backend or skipped:", poolErr);
+            }
+
+            // 2. Log this liquidity addition transaction
+            try {
+              await liquidityService.recordAddLiquidity({
+                poolAddress: actualPoolAddr.toLowerCase(),
+                walletAddress: address?.toLowerCase() || "",
+                token0Amount: amount0.toString(),
+                token1Amount: amount1.toString(),
+                txHash: mintHash.toLowerCase(),
+                chainId: chainId || mstChain.id
+              });
+              console.log("Logged initial add-liquidity in backend successfully");
+            } catch (liqErr) {
+              console.error("Failed to log initial add-liquidity in backend:", liqErr);
+            }
+
+            // 3. Register position NFT in database
+            if (tokenIdStr) {
+              try {
+                const positionInfo = await publicClient?.readContract({
+                  address: CONTRACTS.positionManager,
+                  abi: nonfungiblePositionManagerAbi,
+                  functionName: "positions",
+                  args: [BigInt(tokenIdStr)]
+                }) as any;
+
+                const onChainLiquidity = positionInfo ? (positionInfo[7] as bigint) : 0n;
+                let finalAmount0 = amount0;
+                let finalAmount1 = amount1;
+
+                if (actualPoolAddr && actualPoolAddr !== "0x0000000000000000000000000000000000000000") {
+                  try {
+                    const slot0 = await publicClient?.readContract({
+                      address: actualPoolAddr,
+                      abi: poolAbi,
+                      functionName: "slot0"
+                    }) as any;
+                    const sqrtPriceX96 = slot0[0] as bigint;
+                    const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+                      onChainLiquidity,
+                      sqrtPriceX96,
+                      tickLowerAligned,
+                      tickUpperAligned
+                    );
+                    finalAmount0 = calcAmt0;
+                    finalAmount1 = calcAmt1;
+                  } catch (mathErr) {
+                    console.error("Failed calculating reserves from pool slot0 during creation sync", mathErr);
+                  }
+                }
+
+                await lpPositionService.syncPosition({
+                  tokenId: tokenIdStr,
+                  poolAddress: actualPoolAddr.toLowerCase(),
+                  walletAddress: address?.toLowerCase() || "",
+                  tickLower: tickLowerAligned,
+                  tickUpper: tickUpperAligned,
+                  liquidity: onChainLiquidity.toString(),
+                  token0Amount: finalAmount0.toString(),
+                  token1Amount: finalAmount1.toString()
+                });
+                console.log("Registered LP Position NFT in backend successfully:", tokenIdStr);
+              } catch (posErr) {
+                console.error("Failed to register LP Position NFT in backend:", posErr);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Failed to sync new position/pool with backend:", err);
+        }
 
         // Mark as completed
         setCreateSteps(prev => prev.map((s, i) => i === index ? { ...s, status: "completed" } : s));
@@ -1331,6 +1481,71 @@ export default function LiquidityPage() {
       setTxHash(hash);
       setStatusText("Waiting for block confirmation on MST Blockchain...");
       await publicClient?.waitForTransactionReceipt({ hash });
+
+      // Log the liquidity addition in the backend database
+      try {
+        await liquidityService.recordAddLiquidity({
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address?.toLowerCase() || "",
+          token0Amount: amount0Desired.toString(),
+          token1Amount: amount1Desired.toString(),
+          txHash: hash.toLowerCase(),
+          chainId: chainId || mstChain.id
+        });
+        console.log("Logged increase-liquidity in backend successfully");
+      } catch (liqErr) {
+        console.error("Failed to log increase-liquidity in backend:", liqErr);
+      }
+
+      // Sync position in database
+      try {
+        const positionInfo = await publicClient?.readContract({
+          address: CONTRACTS.positionManager,
+          abi: nonfungiblePositionManagerAbi,
+          functionName: "positions",
+          args: [expandedPosition.tokenId]
+        }) as any;
+
+        const onChainLiquidity = positionInfo ? (positionInfo[7] as bigint) : 0n;
+        let finalAmount0 = amount0Desired;
+        let finalAmount1 = amount1Desired;
+
+        if (expandedPosition.poolAddress && expandedPosition.poolAddress !== "0x0000000000000000000000000000000000000000") {
+          try {
+            const slot0 = await publicClient?.readContract({
+              address: expandedPosition.poolAddress as Address,
+              abi: poolAbi,
+              functionName: "slot0"
+            }) as any;
+            const sqrtPriceX96 = slot0[0] as bigint;
+            const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+              onChainLiquidity,
+              sqrtPriceX96,
+              expandedPosition.tickLower,
+              expandedPosition.tickUpper
+            );
+            finalAmount0 = calcAmt0;
+            finalAmount1 = calcAmt1;
+          } catch (mathErr) {
+            console.error("Failed calculating reserves from pool slot0 during add sync", mathErr);
+          }
+        }
+
+        await lpPositionService.syncPosition({
+          tokenId: expandedPosition.tokenId.toString(),
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address?.toLowerCase() || "",
+          tickLower: expandedPosition.tickLower,
+          tickUpper: expandedPosition.tickUpper,
+          liquidity: onChainLiquidity.toString(),
+          token0Amount: finalAmount0.toString(),
+          token1Amount: finalAmount1.toString()
+        });
+        console.log("Synced LP Position NFT in backend after increaseLiquidity");
+      } catch (posErr) {
+        console.error("Failed to sync LP Position NFT in backend after increaseLiquidity:", posErr);
+      }
+
       setStatusText("Concentrated liquidity successfully added!");
       setAddAmount0("");
       setAddAmount1("");
@@ -1384,6 +1599,21 @@ export default function LiquidityPage() {
       setStatusText("Waiting for decrease liquidity transaction receipt...");
       await publicClient?.waitForTransactionReceipt({ hash: decreaseHash });
 
+      // Log the liquidity removal in the backend database
+      try {
+        await liquidityService.recordRemoveLiquidity({
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address?.toLowerCase() || "",
+          token0Amount: expectedAmount0.toString(),
+          token1Amount: expectedAmount1.toString(),
+          txHash: decreaseHash.toLowerCase(),
+          chainId: chainId || mstChain.id
+        });
+        console.log("Logged remove-liquidity in backend successfully");
+      } catch (liqErr) {
+        console.error("Failed to log remove-liquidity in backend:", liqErr);
+      }
+
       // Now collect the tokens from decrease liquidity
       setStatusText("Collecting tokens from position...");
       const collectHash = await writeContractAsync({
@@ -1403,6 +1633,57 @@ export default function LiquidityPage() {
       setTxHash(collectHash);
       setStatusText("Waiting for token collection receipt...");
       await publicClient?.waitForTransactionReceipt({ hash: collectHash });
+
+      // Sync position in database after removal
+      try {
+        const positionInfo = await publicClient?.readContract({
+          address: CONTRACTS.positionManager,
+          abi: nonfungiblePositionManagerAbi,
+          functionName: "positions",
+          args: [expandedPosition.tokenId]
+        }) as any;
+
+        const onChainLiquidity = positionInfo ? (positionInfo[7] as bigint) : 0n;
+        let finalAmount0 = 0n;
+        let finalAmount1 = 0n;
+
+        if (expandedPosition.poolAddress && expandedPosition.poolAddress !== "0x0000000000000000000000000000000000000000") {
+          try {
+            const slot0 = await publicClient?.readContract({
+              address: expandedPosition.poolAddress as Address,
+              abi: poolAbi,
+              functionName: "slot0"
+            }) as any;
+            const sqrtPriceX96 = slot0[0] as bigint;
+            if (onChainLiquidity > 0n) {
+              const [calcAmt0, calcAmt1] = getAmountsForLiquidity(
+                onChainLiquidity,
+                sqrtPriceX96,
+                expandedPosition.tickLower,
+                expandedPosition.tickUpper
+              );
+              finalAmount0 = calcAmt0;
+              finalAmount1 = calcAmt1;
+            }
+          } catch (mathErr) {
+            console.error("Failed calculating reserves from pool slot0 during remove sync", mathErr);
+          }
+        }
+
+        await lpPositionService.syncPosition({
+          tokenId: expandedPosition.tokenId.toString(),
+          poolAddress: expandedPosition.poolAddress.toLowerCase(),
+          walletAddress: address?.toLowerCase() || "",
+          tickLower: expandedPosition.tickLower,
+          tickUpper: expandedPosition.tickUpper,
+          liquidity: onChainLiquidity.toString(),
+          token0Amount: finalAmount0.toString(),
+          token1Amount: finalAmount1.toString()
+        });
+        console.log("Synced LP Position NFT in backend after decreaseLiquidity");
+      } catch (posErr) {
+        console.error("Failed to sync LP Position NFT in backend after decreaseLiquidity:", posErr);
+      }
 
       setStatusText("Liquidity successfully removed and tokens collected!");
       fetchLPState();
@@ -1462,7 +1743,8 @@ export default function LiquidityPage() {
 
   return (
     <div className="relative min-h-screen px-4 pb-20 pt-10 overflow-hidden font-sans">
-      <main className="relative z-10 max-w-[1000px] mx-auto space-y-8">
+      <main className={`relative z-10 mx-auto space-y-8 transition-all duration-300 ${currentView === "create" ? "max-w-[1200px]" : "max-w-[1000px]"
+        }`}>
 
         {/* VIEW 1: POSITIONS LIST DASHBOARD */}
         {currentView === "list" && (
@@ -1883,8 +2165,8 @@ export default function LiquidityPage() {
                                           <div className="relative h-2 w-full rounded-full overflow-hidden bg-zinc-800">
                                             <div
                                               className={`absolute h-full rounded-full transition-all duration-300 ${pos.isInRange
-                                                  ? "bg-gradient-to-r from-emerald-500 to-teal-400"
-                                                  : "bg-gradient-to-r from-amber-500 to-orange-400"
+                                                ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                                : "bg-gradient-to-r from-amber-500 to-orange-400"
                                                 }`}
                                               style={{
                                                 left: `${leftPercent}%`,
@@ -2119,17 +2401,13 @@ export default function LiquidityPage() {
 
         {/* VIEW 2: CREATE POOL & INITIALIZE POSITION WIZARD */}
         {currentView === "create" && (
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="max-w-[650px] mx-auto space-y-6"
-          >
+          <div className="space-y-6">
 
             {/* Navigation back and header */}
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setCurrentView("list")}
-                className={`p-2.5 rounded-xl border transition-all ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30 text-zinc-400 hover:text-white" : "bg-white border-zinc-200 text-zinc-600 hover:text-black"}`}
+                className={`p-2.5 rounded-xl border transition-all ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30 text-zinc-400 hover:text-white" : "bg-white border-zinc-200 text-zinc-655 hover:text-black"}`}
               >
                 <ArrowLeft size={18} />
               </button>
@@ -2143,466 +2421,640 @@ export default function LiquidityPage() {
               </div>
             </div>
 
-            {/* Creation Wizard Card */}
-            <div
-              className={`p-8 rounded-[30px] border shadow-2xl relative backdrop-blur-2xl transition-all duration-300 overflow-visible
-                ${isDark
-                  ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
-                  : "bg-white/80 border-zinc-200 text-zinc-950"
-                }`}
-              style={{
-                boxShadow: isDark
-                  ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
-                  : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
-              }}
-            >
-              <div className="relative z-10 space-y-6">
-                {/* Pool Fee Tier */}
-                <div>
-                  <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
-                    Pool Fee Tier
-                  </label>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {[
-                      { fee: 500, label: "0.05%", desc: "Best for very stable pairs", vol: "12% vol" },
-                      { fee: 3000, label: "0.30%", desc: "Best for most pairs", vol: "83% vol" },
-                      { fee: 10000, label: "1.00%", desc: "Best for exotic/volatile pairs", vol: "5% vol" }
-                    ].map((item) => (
-                      <button
-                        key={item.fee}
-                        type="button"
-                        onClick={() => handleFeeTierChange(item.fee)}
-                        className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between gap-3 relative overflow-hidden backdrop-blur-md
-                          ${initFee === item.fee
-                            ? isDark
-                              ? "bg-cyan-500/10 border-cyan-500/50 text-white shadow-lg shadow-cyan-500/5"
-                              : "bg-cyan-500/10 border-cyan-500/40 text-zinc-950 shadow-md"
-                            : isDark
-                              ? "bg-[#131A2A]/40 border-[#2C364F]/30 text-zinc-400 hover:border-[#2C364F]/60"
-                              : "bg-white border-zinc-200 text-zinc-650 hover:border-zinc-300"
-                          }`}
-                      >
-                        {initFee === item.fee && (
-                          <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-cyan-500/20 to-transparent rounded-full blur-md" />
-                        )}
-                        <div className="flex justify-between items-center w-full">
-                          <span className="text-xl font-black">{item.label}</span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase
-                            ${initFee === item.fee
-                              ? "bg-cyan-400/25 text-cyan-400"
-                              : isDark ? "bg-[#1E2538] text-zinc-400" : "bg-zinc-100 text-zinc-550"
-                            }`}
-                          >
-                            {item.vol}
-                          </span>
-                        </div>
-                        <div>
-                          <p className={`text-xs font-semibold leading-relaxed ${initFee === item.fee ? "text-cyan-400/90" : "text-zinc-500"}`}>
-                            {item.desc}
-                          </p>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            {/* Two Column Layout: Left indicator list & Right content card */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-                {/* Info block */}
-                {tokenA_Symbol && tokenB_Symbol && (
-                  creationMode === "existing" && isPoolInitialized ? (
-                    <div className={`p-5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
-                      ${isDark ? "bg-[#1B2236]/30 border-emerald-500/25 text-zinc-400" : "bg-emerald-50/50 border-emerald-300/20 text-zinc-700"}`}>
-                      <Info size={20} className="text-emerald-500 shrink-0 mt-0.5" />
-                      <div>
-                        <p className={`font-bold mb-0.5 ${isDark ? "text-emerald-400" : "text-emerald-700"}`}>Pool has been created, you can add new position</p>
-                        This pool is initialized. The current rate is <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {poolCurrentPrice?.toFixed(4)} {tokenB_Symbol}</span>
-                        {quoterPrice !== null && (
-                          <span> (Quote price: <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {quoterPrice.toFixed(4)} {tokenB_Symbol}</span>)</span>
-                        )}. Input values are auto-aligned to guarantee all deposited funds are used.
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={`p-5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
-                      ${isDark ? "bg-[#1B2236]/30 border-cyan-500/25 text-zinc-400" : "bg-cyan-50/50 border-cyan-300/20 text-zinc-700"}`}>
-                      <Info size={20} className="text-cyan-400 shrink-0 mt-0.5" />
-                      <div>
-                        <p className={`font-bold mb-0.5 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Create New Pool</p>
-                        Pool does not exist, you can create new pool. Set a starting price and deploy the pool.
-                      </div>
-                    </div>
-                  )
-                )}
+              {/* Left Column: Progress Steps */}
+              <div className="lg:col-span-4 space-y-4 w-full">
+                <div className={`p-6 rounded-[24px] border backdrop-blur-md space-y-6
+                                                    ${isDark ? "bg-[#0b0b14]/50 border-zinc-800/60" : "bg-white/50 border-zinc-200"}`}>
 
-                {/* Deposit Amounts */}
-                <div className="space-y-4">
-                  <label className={`block text-base font-bold -mb-1 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
-                    Deposit Amounts
-                  </label>
-
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenA_Symbol || "Token A"} amount</label>
-                      <span className="text-xs font-mono text-zinc-550">Bal: {wmstBalance}</span>
-                    </div>
-                    <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
-                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
-                      ${isTokenInputDisabled(true) ? "opacity-50" : ""}`}
+                  {/* Step 1 Indicator */}
+                  <button
+                    onClick={() => setWizardStep(1)}
+                    className="flex items-center gap-4 text-left w-full group/step"
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all duration-300
+                                                        ${wizardStep === 1
+                        ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/25 scale-105"
+                        : "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                      }`}
                     >
-                      <input
-                        id="tokenA-amount-input"
-                        type="text"
-                        placeholder="0.0"
-                        value={initWmst}
-                        onChange={(e) => handleInitWmstChange(e.target.value)}
-                        disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(true)}
-                        className="w-full bg-transparent border-none outline-none text-base font-medium"
-                      />
-                      <button
-                        onClick={() => setModalOpen("A")}
-                        disabled={isWorking}
-                        className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
-                          ${isDark
-                            ? "bg-[#181930] hover:bg-zinc-800 text-white"
-                            : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
-                          }`}
-                      >
-                        {tokenA_Symbol ? (
-                          <>
-                            <TokenLogo symbol={tokenA_Symbol} size={20} />
-                            <span>{tokenA_Symbol}</span>
-                          </>
-                        ) : (
-                          <span className="text-zinc-400">Select Token</span>
-                        )}
-                        <ChevronDown size={14} className="opacity-60" />
-                      </button>
+                      {wizardStep > 1 ? "✓" : "1"}
                     </div>
-                    <div className="flex justify-between items-center mt-1.5">
-                      {tokenA_Symbol && (
-                        <span className="text-xs text-zinc-500 font-medium">
-                          USD Value: <span className="font-bold text-zinc-400 font-mono">${(Number(initWmst) * getTokenPrice(tokenA_Symbol)).toFixed(2)}</span>
-                        </span>
-                      )}
-                      {quoterAmountB && (
-                        <span className={`text-xs font-medium ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
-                          Equivalent swap value: <span className="font-bold text-cyan-400">{quoterAmountB} {tokenB_Symbol}</span> via Quoter
-                        </span>
-                      )}
+                    <div>
+                      <p className={`text-[10px] uppercase font-bold tracking-wider ${wizardStep === 1 ? "text-cyan-400" : "text-zinc-500"}`}>Step 1</p>
+                      <p className={`text-sm font-black transition-colors ${wizardStep === 1 ? "text-white" : "text-zinc-400 group-hover/step:text-zinc-200"}`}>Select token pair & fees</p>
                     </div>
-                    {tokenA_Symbol && initWmst !== "" && !isTokenInputDisabled(true) && (Number(initWmst) <= 0 || isNaN(Number(initWmst))) && (
-                      <span className="text-xs text-red-500 mt-1.5 block font-semibold">
-                        {tokenA_Symbol} amount must be a positive number.
-                      </span>
-                    )}
-                  </div>
+                  </button>
 
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenB_Symbol || "Token B"} amount</label>
-                      <span className="text-xs font-mono text-zinc-550">Bal: {usdcBalance}</span>
-                    </div>
-                    <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
-                      ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
-                      ${isTokenInputDisabled(false) ? "opacity-50" : ""}`}
+                  {/* Connecting Line */}
+                  <div className="w-[2px] h-6 bg-zinc-800 ml-4 -my-4" />
+
+                  {/* Step 2 Indicator */}
+                  <button
+                    onClick={() => {
+                      if (tokenA_Symbol && tokenB_Symbol) {
+                        setWizardStep(2);
+                      }
+                    }}
+                    disabled={!tokenA_Symbol || !tokenB_Symbol}
+                    className={`flex items-center gap-4 text-left w-full group/step ${(!tokenA_Symbol || !tokenB_Symbol) ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all duration-300
+                                                        ${wizardStep === 2
+                        ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/25 scale-105"
+                        : "bg-zinc-800 text-zinc-500 border border-zinc-700/50"
+                      }`}
                     >
-                      <input
-                        id="tokenB-amount-input"
-                        type="text"
-                        placeholder="0.0"
-                        value={initUsdc}
-                        onChange={(e) => handleInitUsdcChange(e.target.value)}
-                        disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(false)}
-                        className="w-full bg-transparent border-none outline-none text-base font-medium"
-                      />
-                      <button
-                        onClick={() => setModalOpen("B")}
-                        disabled={isWorking}
-                        className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
-                          ${isDark
-                            ? "bg-[#181930] hover:bg-zinc-800 text-white"
-                            : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
-                          }`}
-                      >
-                        {tokenB_Symbol ? (
-                          <>
-                            <TokenLogo symbol={tokenB_Symbol} size={20} />
-                            <span>{tokenB_Symbol}</span>
-                          </>
-                        ) : (
-                          <span className="text-zinc-400">Select Token</span>
-                        )}
-                        <ChevronDown size={14} className="opacity-60" />
-                      </button>
+                      2
                     </div>
-                    <div className="flex justify-between items-center mt-1.5">
-                      {tokenB_Symbol && (
-                        <span className="text-xs text-zinc-500 font-medium">
-                          USD Value: <span className="font-bold text-zinc-400 font-mono">${(Number(initUsdc) * getTokenPrice(tokenB_Symbol)).toFixed(2)}</span>
-                        </span>
-                      )}
-                      {quoterAmountA && (
-                        <span className={`text-xs font-medium ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
-                          Equivalent swap value: <span className="font-bold text-cyan-400">{quoterAmountA} {tokenA_Symbol}</span> via Quoter
-                        </span>
-                      )}
-                    </div>
-                    {tokenB_Symbol && initUsdc !== "" && !isTokenInputDisabled(false) && (Number(initUsdc) <= 0 || isNaN(Number(initUsdc))) && (
-                      <span className="text-xs text-red-500 mt-1.5 block font-semibold">
-                        {tokenB_Symbol} amount must be a positive number.
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {creationMode === "new" && tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && !isNaN(Number(initWmst)) && !isNaN(Number(initUsdc)) && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
-                  <div className={`p-4 rounded-xl border flex items-center justify-between text-sm backdrop-blur-sm
-                    ${isDark ? "bg-[#1B2236]/35 border-[#2C364F]/30 text-zinc-350" : "bg-zinc-50 border-zinc-200 text-zinc-700"}`}>
-                    <span className="font-semibold text-zinc-400">Calculated Starting Price:</span>
-                    <span className="font-mono font-bold text-cyan-400">
-                      1 {tokenA_Symbol} = {(Number(initUsdc) / Number(initWmst)).toFixed(4)} {tokenB_Symbol}
-                    </span>
-                  </div>
-                )}
-
-                {/* Price Range boundaries */}
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <label className={`text-base font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
-                      Price Range boundaries
-                    </label>
-
-                    {/* Range Mode Switch */}
-                    <div className={`flex rounded-xl p-0.5 border backdrop-blur-md transition-all
-                      ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200"}`}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRangeMode("custom");
-                          setRangeStrategy("stable");
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                          ${rangeMode === "custom"
-                            ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
-                            : "text-zinc-400 hover:text-zinc-200"}`}
-                      >
-                        Custom Range
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRangeMode("full");
-                          setRangeStrategy("full");
-                        }}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                          ${rangeMode === "full"
-                            ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
-                            : "text-zinc-400 hover:text-zinc-200"}`}
-                      >
-                        Full Range
-                      </button>
-                    </div>
-                  </div>
-
-                  {rangeMode === "custom" && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        type="button"
-                        onClick={() => setRangeStrategy("stable")}
-                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
-                          ${rangeStrategy === "stable"
-                            ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
-                            : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-500 hover:text-zinc-700"
-                          }`}
-                      >
-                        Stable Preset (±3 ticks)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRangeStrategy("wide")}
-                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
-                          ${rangeStrategy === "wide"
-                            ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
-                            : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-500 hover:text-zinc-700"
-                          }`}
-                      >
-                        Wide Preset (-50% to +100%)
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={rangeMode === "full" ? "0" : priceLower}
-                          onChange={(e) => handlePriceLowerChange(e.target.value)}
-                          onBlur={handlePriceLowerBlur}
-                          disabled={isWorking || rangeMode === "full"}
-                          className={`w-full py-3 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
-                            ${isDark
-                              ? "border-[#2C364F]/50 focus:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
-                              : "border-zinc-300 focus:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
-                        />
-                        {rangeMode !== "full" && (
-                          <span className="absolute right-3 top-3.5 text-[10px] font-bold text-zinc-500">
-                            USDC/WMST
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex justify-between items-center mt-1.5 px-1">
-                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Min Price</span>
-                        <span className={`text-[10px] font-black ${Number(getDeviationLabel(true).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
-                          {getDeviationLabel(true)}
-                        </span>
-                      </div>
+                      <p className={`text-[10px] uppercase font-bold tracking-wider ${wizardStep === 2 ? "text-cyan-400" : "text-zinc-500"}`}>Step 2</p>
+                      <p className={`text-sm font-black transition-colors ${wizardStep === 2 ? "text-white" : "text-zinc-400 group-hover/step:text-zinc-200"}`}>Set range & deposit amounts</p>
                     </div>
+                  </button>
 
-                    <div>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={rangeMode === "full" ? "Infinity" : priceUpper}
-                          onChange={(e) => handlePriceUpperChange(e.target.value)}
-                          onBlur={handlePriceUpperBlur}
-                          disabled={isWorking || rangeMode === "full"}
-                          className={`w-full py-3 px-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
-                            ${isDark
-                              ? "border-[#2C364F]/50 focus:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
-                              : "border-zinc-300 focus:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
-                        />
-                        {rangeMode !== "full" && (
-                          <span className="absolute right-3 top-3.5 text-[10px] font-bold text-zinc-500">
-                            USDC/WMST
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex justify-between items-center mt-1.5 px-1">
-                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Max Price</span>
-                        <span className={`text-[10px] font-black ${Number(getDeviationLabel(false).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
-                          {getDeviationLabel(false)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Range Bar */}
-                  {(() => {
-                    const currentPriceVal = poolCurrentPrice || 1.0;
-                    const pLower = rangeMode === "full" ? 0 : Number(priceLower) || 0;
-                    const pUpper = rangeMode === "full" ? Infinity : Number(priceUpper) || Infinity;
-                    const isInRange = currentPriceVal >= pLower && currentPriceVal <= pUpper;
-
-                    const minBound = currentPriceVal * 0.1;
-                    const maxBound = currentPriceVal * 3.0;
-
-                    const getPercentage = (price) => {
-                      if (price <= minBound) return 0;
-                      if (price >= maxBound) return 100;
-                      return ((price - minBound) / (maxBound - minBound)) * 100;
-                    };
-
-                    const leftPercent = getPercentage(pLower);
-                    const rightPercent = getPercentage(pUpper);
-                    const widthPercent = Math.max(1.5, rightPercent - leftPercent);
-                    const currentPercent = getPercentage(currentPriceVal);
-
-                    return (
-                      <div className={`p-6 rounded-2xl border backdrop-blur-sm space-y-4
-                        ${isDark ? "bg-[#131A2A]/25 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
-                        <div className="grid grid-cols-3 text-[10px] text-zinc-550 font-black uppercase tracking-wider">
-                          <span className="text-left">Min Price</span>
-                          <span className="text-cyan-400 font-bold text-center">Current Price</span>
-                          <span className="text-right">Max Price</span>
-                        </div>
-                        <div className="relative h-2 w-full rounded-full overflow-hidden bg-zinc-800">
-                          <div
-                            className={`absolute h-full rounded-full transition-all duration-300 ${isInRange
-                                ? "bg-gradient-to-r from-emerald-500 to-teal-400"
-                                : "bg-gradient-to-r from-amber-500 to-orange-400"
-                              }`}
-                            style={{
-                              left: `${leftPercent}%`,
-                              width: `${widthPercent}%`,
-                            }}
-                          />
-                          <div
-                            className="absolute top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] z-10"
-                            style={{ left: `${currentPercent}%` }}
-                          />
-                        </div>
-                        <div className="grid grid-cols-3 text-xs font-bold font-mono">
-                          <span className="text-zinc-400 text-left">{rangeMode === "full" ? "0" : pLower.toFixed(4)}</span>
-                          <span className="text-cyan-400 text-center">{currentPriceVal.toFixed(4)}</span>
-                          <span className="text-zinc-400 text-right">{rangeMode === "full" ? "∞" : pUpper.toFixed(4)}</span>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Fee & APR Estimation Panel */}
-                  {tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
-                    <div className={`p-4 rounded-2xl border grid grid-cols-2 gap-4 backdrop-blur-sm
-                      ${isDark ? "bg-[#1B2236]/25 border-cyan-500/20" : "bg-cyan-50/20 border-cyan-200"}`}>
-                      <div>
-                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Estimated APR</span>
-                        <span className="text-xl font-black text-emerald-400 font-mono">
-                          {getEstimatedLiquidityAndAPR().apr.toFixed(2)}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Est. 24h Earnings</span>
-                        <span className="text-xl font-black text-cyan-400 font-mono">
-                          ${getEstimatedLiquidityAndAPR().dailyFee.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
                 </div>
-
-
-
-                <button
-                  onClick={() => {
-                    checkCreateSteps();
-                    setPendingAction("create");
-                  }}
-                  disabled={
-                    isWorking ||
-                    !tokenA_Symbol ||
-                    !tokenB_Symbol ||
-                    (creationMode === "new"
-                      ? (!initWmst || !initUsdc || Number(initWmst) <= 0 || Number(initUsdc) <= 0)
-                      : ((!initWmst && !initUsdc) || (Number(initWmst) <= 0 && Number(initUsdc) <= 0))
-                    ) ||
-                    (creationMode === "existing" && !isPoolInitialized)
-                  }
-                  className={`w-full py-4.5 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
-                    ${isWorking ||
-                      !tokenA_Symbol ||
-                      !tokenB_Symbol ||
-                      (creationMode === "new"
-                        ? (!initWmst || !initUsdc || Number(initWmst) <= 0 || Number(initUsdc) <= 0)
-                        : ((!initWmst && !initUsdc) || (Number(initWmst) <= 0 && Number(initUsdc) <= 0))
-                      ) ||
-                      (creationMode === "existing" && !isPoolInitialized)
-                      ? isDark ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-400/40 cursor-not-allowed" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
-                      : isDark
-                        ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/15"
-                        : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white shadow-lg shadow-blue-500/10"
-                    }`}
-                >
-                  {!tokenA_Symbol || !tokenB_Symbol
-                    ? "Select Tokens to Continue"
-                    : isWorking
-                      ? creationMode === "new" ? "Creating Pool..." : "Adding Position..."
-                      : creationMode === "new" ? "Create Pool" : "Add Position"
-                  }
-                </button>
               </div>
 
-            </div>
+              {/* Right Column: Active Step Card */}
+              <div className="lg:col-span-8 w-full">
+                <motion.div
+                  key={wizardStep}
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`p-8 rounded-[30px] border shadow-2xl relative backdrop-blur-2xl transition-all duration-300 overflow-visible
+                                                      ${isDark
+                      ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+                      : "bg-white/80 border-zinc-200 text-zinc-950"
+                    }`}
+                  style={{
+                    boxShadow: isDark
+                      ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                      : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                  }}
+                >
+                  <div className="relative z-10 space-y-6">
 
-          </motion.div>
+                    {wizardStep === 1 ? (
+                      <div className="space-y-6">
+                        {/* Select Pair */}
+                        <div>
+                          <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                            Select Pair
+                          </label>
+                          <div className="grid grid-cols-2 gap-4">
+                            <button
+                              type="button"
+                              onClick={() => setModalOpen("A")}
+                              disabled={isWorking}
+                              className={`flex items-center justify-between p-4 rounded-2xl border transition bg-transparent
+                                                                  ${isDark ? "border-[#2C364F]/50 hover:border-cyan-500/50" : "border-zinc-300 hover:border-cyan-500"}`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                {tokenA_Symbol ? (
+                                  <>
+                                    <TokenLogo symbol={tokenA_Symbol} size={24} />
+                                    <span className="text-lg font-bold">{tokenA_Symbol}</span>
+                                  </>
+                                ) : (
+                                  <span className="text-zinc-550 font-semibold">Select Token A</span>
+                                )}
+                              </div>
+                              <ChevronDown size={18} className="opacity-60" />
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setModalOpen("B")}
+                              disabled={isWorking}
+                              className={`flex items-center justify-between p-4 rounded-2xl border transition bg-transparent
+                                                                  ${isDark ? "border-[#2C364F]/50 hover:border-cyan-500/50" : "border-zinc-300 hover:border-cyan-500"}`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                {tokenB_Symbol ? (
+                                  <>
+                                    <TokenLogo symbol={tokenB_Symbol} size={24} />
+                                    <span className="text-lg font-bold">{tokenB_Symbol}</span>
+                                  </>
+                                ) : (
+                                  <span className="text-zinc-550 font-semibold">Select Token B</span>
+                                )}
+                              </div>
+                              <ChevronDown size={18} className="opacity-60" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Pool Fee Tier */}
+                        <div>
+                          <label className={`block text-base font-bold mb-3 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                            Pool Fee Tier
+                          </label>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {[
+                              { fee: 500, label: "0.05%", desc: "Best for very stable pairs", vol: "12% vol" },
+                              { fee: 3000, label: "0.30%", desc: "Best for most pairs", vol: "83% vol" },
+                              { fee: 10000, label: "1.00%", desc: "Best for exotic/volatile pairs", vol: "5% vol" }
+                            ].map((item) => (
+                              <button
+                                key={item.fee}
+                                type="button"
+                                onClick={() => handleFeeTierChange(item.fee)}
+                                className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between gap-3 relative overflow-hidden backdrop-blur-md
+                                                                    ${initFee === item.fee
+                                    ? isDark
+                                      ? "bg-cyan-500/10 border-cyan-500/50 text-white shadow-lg shadow-cyan-500/5"
+                                      : "bg-cyan-500/10 border-cyan-500/40 text-zinc-950 shadow-md"
+                                    : isDark
+                                      ? "bg-[#131A2A]/40 border-[#2C364F]/30 text-zinc-400 hover:border-[#2C364F]/60"
+                                      : "bg-white border-zinc-200 text-zinc-650 hover:border-zinc-300"
+                                  }`}
+                              >
+                                {initFee === item.fee && (
+                                  <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-br from-cyan-500/20 to-transparent rounded-full blur-md" />
+                                )}
+                                <div className="flex justify-between items-center w-full">
+                                  <span className="text-xl font-black">{item.label}</span>
+                                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase
+                                                                      ${initFee === item.fee
+                                      ? "bg-cyan-400/25 text-cyan-400"
+                                      : isDark ? "bg-[#1E2538] text-zinc-400" : "bg-zinc-100 text-zinc-550"
+                                    }`}
+                                  >
+                                    {item.vol}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className={`text-xs font-semibold leading-relaxed ${initFee === item.fee ? "text-cyan-400/90" : "text-zinc-500"}`}>
+                                    {item.desc}
+                                  </p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Continue Button */}
+                        <button
+                          type="button"
+                          onClick={() => setWizardStep(2)}
+                          disabled={!tokenA_Symbol || !tokenB_Symbol}
+                          className={`w-full py-4 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98] mt-4
+                                                              ${(!tokenA_Symbol || !tokenB_Symbol)
+                              ? isDark ? "bg-zinc-800/40 text-zinc-500 cursor-not-allowed border border-zinc-800/20" : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
+                              : isDark
+                                ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/15"
+                                : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-650 hover:to-blue-700 text-white shadow-lg shadow-blue-500/10"
+                            }`}
+                        >
+                          Continue
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        {/* Info block */}
+                        {tokenA_Symbol && tokenB_Symbol && (
+                          creationMode === "existing" && isPoolInitialized ? (
+                            <div className={`p-5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
+                                                                ${isDark ? "bg-[#1B2236]/30 border-emerald-500/25 text-zinc-400" : "bg-emerald-50/50 border-emerald-300/20 text-zinc-700"}`}>
+                              <Info size={20} className="text-emerald-500 shrink-0 mt-0.5" />
+                              <div>
+                                <p className={`font-bold mb-0.5 ${isDark ? "text-emerald-400" : "text-emerald-700"}`}>Pool has been created, you can add new position</p>
+                                This pool is initialized. The current rate is <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {poolCurrentPrice?.toFixed(4)} {tokenB_Symbol}</span>
+                                {quoterPrice !== null && (
+                                  <span> (Quote price: <span className="font-mono font-bold text-cyan-400">1 {tokenA_Symbol} = {quoterPrice.toFixed(4)} {tokenB_Symbol}</span>)</span>
+                                )}. Input values are auto-aligned to guarantee all deposited funds are used.
+                              </div>
+                            </div>
+                          ) : (
+                            <div className={`p-5 rounded-xl border flex items-start gap-3 text-sm leading-relaxed
+                                                                ${isDark ? "bg-[#1B2236]/30 border-cyan-500/25 text-zinc-400" : "bg-cyan-50/50 border-cyan-300/20 text-zinc-700"}`}>
+                              <Info size={20} className="text-cyan-400 shrink-0 mt-0.5" />
+                              <div>
+                                <p className={`font-bold mb-0.5 ${isDark ? "text-cyan-400" : "text-cyan-700"}`}>Create New Pool</p>
+                                Pool does not exist, you can create new pool. Set a starting price and deploy the pool.
+                              </div>
+                            </div>
+                          )
+                        )}
+
+                        {/* Two Column Sub-Layout for Step 2 */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                          {/* Column 1: Deposit Amounts & APR */}
+                          <div className="space-y-6">
+                            {/* Deposit Amounts */}
+                            <div className="space-y-4">
+                              <label className={`block text-base font-bold -mb-1 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                                Deposit Amounts
+                              </label>
+
+                              <div>
+                                <div className="flex justify-between items-center mb-2">
+                                  <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenA_Symbol || "Token A"} amount</label>
+                                  <span className="text-xs font-mono text-zinc-550">Bal: {wmstBalance}</span>
+                                </div>
+                                <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
+                                                                    ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
+                                                                    ${isTokenInputDisabled(true) ? "opacity-50" : ""}`}
+                                >
+                                  <input
+                                    id="tokenA-amount-input"
+                                    type="text"
+                                    placeholder=""
+                                    value={initWmst}
+                                    onChange={(e) => handleInitWmstChange(e.target.value)}
+                                    onFocus={() => {
+                                      if (initWmst === "0" || initWmst === "0.0") {
+                                        setInitWmst("");
+                                      }
+                                    }}
+                                    disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(true)}
+                                    className="flex-1 min-w-0 bg-transparent border-none outline-none text-base font-medium pr-3"
+                                  />
+                                  <button
+                                    onClick={() => setModalOpen("A")}
+                                    disabled={isWorking}
+                                    className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
+                                                                        ${isDark
+                                        ? "bg-[#181930] hover:bg-zinc-800 text-white"
+                                        : "bg-zinc-100 hover:bg-zinc-200 text-zinc-950"
+                                      }`}
+                                  >
+                                    {tokenA_Symbol ? (
+                                      <>
+                                        <TokenLogo symbol={tokenA_Symbol} size={20} />
+                                        <span>{tokenA_Symbol}</span>
+                                      </>
+                                    ) : (
+                                      <span className="text-zinc-400">Select Token</span>
+                                    )}
+                                    <ChevronDown size={14} className="opacity-60" />
+                                  </button>
+                                </div>
+                                <div className="flex flex-col gap-1 mt-2 px-1 text-xs">
+                                  {tokenA_Symbol && (
+                                    <div className="flex justify-between items-center text-zinc-500 font-medium">
+                                      <span>USD Value:</span>
+                                      <span className="font-bold text-zinc-400 font-mono">${(Number(initWmst) * getTokenPrice(tokenA_Symbol)).toFixed(2)}</span>
+                                    </div>
+                                  )}
+                                  {quoterAmountB && (
+                                    <div className={`flex justify-between items-center font-medium ${isDark ? "text-zinc-400" : "text-zinc-505"}`}>
+                                      <span>Equivalent swap:</span>
+                                      <span className="font-bold text-cyan-400">{quoterAmountB} {tokenB_Symbol}</span>
+                                    </div>
+                                  )}
+                                </div>
+                                {tokenA_Symbol && initWmst !== "" && !isTokenInputDisabled(true) && (Number(initWmst) <= 0 || isNaN(Number(initWmst))) && (
+                                  <span className="text-xs text-red-500 mt-1.5 block font-semibold">
+                                    {tokenA_Symbol} amount must be a positive number.
+                                  </span>
+                                )}
+                              </div>
+
+                              <div>
+                                <div className="flex justify-between items-center mb-2">
+                                  <label className={`text-sm font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>{creationMode === "existing" ? "" : "Initial "}{tokenB_Symbol || "Token B"} amount</label>
+                                  <span className="text-xs font-mono text-zinc-550">Bal: {usdcBalance}</span>
+                                </div>
+                                <div className={`relative flex items-center justify-between rounded-xl border transition bg-transparent p-2 pl-4 pr-2
+                                                                    ${isDark ? "border-[#2C364F]/50 focus-within:border-cyan-500/50" : "border-zinc-300 focus-within:border-cyan-500"}
+                                                                    ${isTokenInputDisabled(false) ? "opacity-50" : ""}`}
+                                >
+                                  <input
+                                    id="tokenB-amount-input"
+                                    type="text"
+                                    placeholder=""
+                                    value={initUsdc}
+                                    onChange={(e) => handleInitUsdcChange(e.target.value)}
+                                    onFocus={() => {
+                                      if (initUsdc === "0" || initUsdc === "0.0") {
+                                        setInitUsdc("");
+                                      }
+                                    }}
+                                    disabled={isWorking || !tokenA_Symbol || !tokenB_Symbol || isTokenInputDisabled(false)}
+                                    className="flex-1 min-w-0 bg-transparent border-none outline-none text-base font-medium pr-3"
+                                  />
+                                  <button
+                                    onClick={() => setModalOpen("B")}
+                                    disabled={isWorking}
+                                    className={`flex items-center gap-2 py-2 pl-3 pr-4 rounded-lg font-bold text-sm transition-colors relative z-10
+                                                                        ${isDark
+                                        ? "bg-[#181930] hover:bg-zinc-800 text-white"
+                                        : "bg-zinc-100 hover:bg-zinc-200 text-zinc-955"
+                                      }`}
+                                  >
+                                    {tokenB_Symbol ? (
+                                      <>
+                                        <TokenLogo symbol={tokenB_Symbol} size={20} />
+                                        <span>{tokenB_Symbol}</span>
+                                      </>
+                                    ) : (
+                                      <span className="text-zinc-400">Select Token</span>
+                                    )}
+                                    <ChevronDown size={14} className="opacity-60" />
+                                  </button>
+                                </div>
+                                <div className="flex flex-col gap-1 mt-2 px-1 text-xs">
+                                  {tokenB_Symbol && (
+                                    <div className="flex justify-between items-center text-zinc-500 font-medium">
+                                      <span>USD Value:</span>
+                                      <span className="font-bold text-zinc-400 font-mono">${(Number(initUsdc) * getTokenPrice(tokenB_Symbol)).toFixed(2)}</span>
+                                    </div>
+                                  )}
+                                  {quoterAmountA && (
+                                    <div className={`flex justify-between items-center font-medium ${isDark ? "text-zinc-400" : "text-zinc-505"}`}>
+                                      <span>Equivalent swap:</span>
+                                      <span className="font-bold text-cyan-400">{quoterAmountA} {tokenA_Symbol}</span>
+                                    </div>
+                                  )}
+                                </div>
+                                {tokenB_Symbol && initUsdc !== "" && !isTokenInputDisabled(false) && (Number(initUsdc) <= 0 || isNaN(Number(initUsdc))) && (
+                                  <span className="text-xs text-red-500 mt-1.5 block font-semibold">
+                                    {tokenB_Symbol} amount must be a positive number.
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {creationMode === "new" && tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && !isNaN(Number(initWmst)) && !isNaN(Number(initUsdc)) && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
+                              <div className={`p-4 rounded-xl border flex items-center justify-between text-sm backdrop-blur-sm
+                                                                  ${isDark ? "bg-[#1B2236]/35 border-[#2C364F]/30 text-zinc-350" : "bg-zinc-50 border-zinc-200 text-zinc-700"}`}>
+                                <span className="font-semibold text-zinc-400">Calculated Starting Price:</span>
+                                <span className="font-mono font-bold text-cyan-400">
+                                  1 {tokenA_Symbol} = {(Number(initUsdc) / Number(initWmst)).toFixed(4)} {tokenB_Symbol}
+                                </span>
+                              </div>
+                            )}
+
+                            {/* Estimated APR and daily earnings */}
+                            {tokenA_Symbol && tokenB_Symbol && initWmst && initUsdc && !isNaN(Number(initWmst)) && !isNaN(Number(initUsdc)) && Number(initWmst) > 0 && Number(initUsdc) > 0 && (
+                              <div className={`p-4 rounded-xl border grid grid-cols-2 gap-4 backdrop-blur-sm
+                                                                  ${isDark ? "bg-[#1B2236]/25 border-cyan-500/20" : "bg-cyan-50/20 border-cyan-200"}`}>
+                                <div>
+                                  <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Estimated APR</span>
+                                  <span className="text-xl font-black text-emerald-400 font-mono">
+                                    {getEstimatedLiquidityAndAPR().apr.toFixed(2)}%
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wider block">Est. 24h Earnings</span>
+                                  <span className="text-xl font-black text-cyan-400 font-mono">
+                                    ${getEstimatedLiquidityAndAPR().dailyFee.toFixed(2)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Column 2: Price Range boundaries */}
+                          <div className="space-y-6">
+                            {/* Price Range boundaries */}
+                            <div className="space-y-4">
+                              <div className="flex justify-between items-center">
+                                <label className={`text-base font-bold ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                                  Price Range boundaries
+                                </label>
+
+                                {/* Range Mode Switch */}
+                                <div className={`flex rounded-xl p-0.5 border backdrop-blur-md transition-all
+                                                                    ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200"}`}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRangeMode("custom");
+                                      setRangeStrategy("stable");
+                                    }}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                                                                        ${rangeMode === "custom"
+                                        ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
+                                        : "text-zinc-400 hover:text-zinc-200"}`}
+                                  >
+                                    Custom
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRangeMode("full");
+                                      setRangeStrategy("full");
+                                    }}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                                                                        ${rangeMode === "full"
+                                        ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-950 border border-zinc-200"
+                                        : "text-zinc-400 hover:text-zinc-200"}`}
+                                  >
+                                    Full
+                                  </button>
+                                </div>
+                              </div>
+
+                              {rangeMode === "custom" && (
+                                <div className="grid grid-cols-2 gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => setRangeStrategy("stable")}
+                                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
+                                                                        ${rangeStrategy === "stable"
+                                        ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
+                                        : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-505 hover:text-zinc-700"
+                                      }`}
+                                  >
+                                    Stable (±3 ticks)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setRangeStrategy("wide")}
+                                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all
+                                                                        ${rangeStrategy === "wide"
+                                        ? isDark ? "bg-cyan-500/10 border-cyan-500/40 text-cyan-400" : "bg-zinc-100 border-zinc-300 text-zinc-950"
+                                        : isDark ? "bg-[#131A2A]/20 border-transparent text-zinc-500 hover:text-zinc-300" : "bg-zinc-50 border-transparent text-zinc-505 hover:text-zinc-700"
+                                      }`}
+                                  >
+                                    Wide (-50% to +100%)
+                                  </button>
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-2 gap-4 mt-3">
+                                <div>
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      value={rangeMode === "full" ? "0" : priceLower}
+                                      onChange={(e) => handlePriceLowerChange(e.target.value)}
+                                      onBlur={handlePriceLowerBlur}
+                                      disabled={isWorking || rangeMode === "full"}
+                                      style={{ paddingRight: "78px" }}
+                                      className={`w-full py-3 pl-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
+                                                                          ${isDark
+                                          ? "border-[#2C364F]/50 focus-within:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
+                                          : "border-zinc-300 focus-within:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
+                                    />
+                                    {rangeMode !== "full" && (
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-zinc-500/80 uppercase tracking-wide pointer-events-none">
+                                        {tokenB_Symbol}/{tokenA_Symbol}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex justify-between items-center mt-1.5 px-1">
+                                    <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Min Price</span>
+                                    <span className={`text-[10px] font-black ${Number(getDeviationLabel(true).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                                      {getDeviationLabel(true)}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      value={rangeMode === "full" ? "Infinity" : priceUpper}
+                                      onChange={(e) => handlePriceUpperChange(e.target.value)}
+                                      onBlur={handlePriceUpperBlur}
+                                      disabled={isWorking || rangeMode === "full"}
+                                      style={{ paddingRight: "78px" }}
+                                      className={`w-full py-3 pl-4 rounded-xl border text-sm font-mono outline-none bg-transparent transition
+                                                                          ${isDark
+                                          ? "border-[#2C364F]/50 focus-within:border-cyan-500/50 disabled:bg-[#131A2A]/30 disabled:border-zinc-800/40"
+                                          : "border-zinc-300 focus-within:border-cyan-500 disabled:bg-zinc-100/50 disabled:border-zinc-200"}`}
+                                    />
+                                    {rangeMode !== "full" && (
+                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-zinc-500/80 uppercase tracking-wide pointer-events-none">
+                                        {tokenB_Symbol}/{tokenA_Symbol}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex justify-between items-center mt-1.5 px-1">
+                                    <span className="text-[10px] text-zinc-550 font-bold uppercase tracking-wide">Max Price</span>
+                                    <span className={`text-[10px] font-black ${Number(getDeviationLabel(false).replace("%", "")) < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                                      {getDeviationLabel(false)}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Range Bar */}
+                              {(() => {
+                                const currentPriceVal = poolCurrentPrice || 1.0;
+                                const pLower = rangeMode === "full" ? 0 : Number(priceLower) || 0;
+                                const pUpper = rangeMode === "full" ? Infinity : Number(priceUpper) || Infinity;
+                                const isInRange = currentPriceVal >= pLower && currentPriceVal <= pUpper;
+
+                                const minBound = currentPriceVal * 0.1;
+                                const maxBound = currentPriceVal * 3.0;
+
+                                const getPercentage = (price) => {
+                                  if (price <= minBound) return 0;
+                                  if (price >= maxBound) return 100;
+                                  return ((price - minBound) / (maxBound - minBound)) * 100;
+                                };
+
+                                const leftPercent = getPercentage(pLower);
+                                const rightPercent = getPercentage(pUpper);
+                                const widthPercent = Math.max(1.5, rightPercent - leftPercent);
+                                const currentPercent = getPercentage(currentPriceVal);
+
+                                return (
+                                  <div className={`p-6 rounded-2xl border backdrop-blur-sm space-y-4
+                                                                      ${isDark ? "bg-[#131A2A]/25 border-[#2C364F]/20" : "bg-zinc-50 border-zinc-200"}`}>
+                                    <div className="grid grid-cols-3 text-[10px] text-zinc-550 font-black uppercase tracking-wider">
+                                      <span className="text-left">Min Price</span>
+                                      <span className="text-cyan-400 font-bold text-center">Current Price</span>
+                                      <span className="text-right">Max Price</span>
+                                    </div>
+                                    <div className="relative h-2 w-full rounded-full overflow-hidden bg-zinc-800">
+                                      <div
+                                        className={`absolute h-full rounded-full transition-all duration-300 ${isInRange
+                                          ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                                          : "bg-gradient-to-r from-amber-500 to-orange-400"
+                                          }`}
+                                        style={{
+                                          left: `${leftPercent}%`,
+                                          width: `${widthPercent}%`,
+                                        }}
+                                      />
+                                      <div
+                                        className="absolute top-0 bottom-0 w-1 bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] z-10"
+                                        style={{
+                                          left: `${currentPercent}%`,
+                                        }}
+                                      />
+                                    </div>
+                                    <div className="grid grid-cols-3 text-xs font-mono font-bold">
+                                      <span className="text-left text-zinc-400">{rangeMode === "full" ? "0" : pLower.toFixed(4)}</span>
+                                      <span className="text-cyan-400 text-center">{currentPriceVal.toFixed(4)}</span>
+                                      <span className="text-right text-zinc-400">{rangeMode === "full" ? "Infinity" : pUpper.toFixed(4)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Action buttons (Back + Confirm) */}
+                        <div className="flex gap-4 items-center pt-4">
+                          <button
+                            type="button"
+                            onClick={() => setWizardStep(1)}
+                            className={`py-4 px-6 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98] border
+                                                                ${isDark
+                                ? "border-zinc-800 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                                : "border-zinc-200 text-zinc-650 hover:bg-zinc-150"
+                              }`}
+                          >
+                            Back
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              checkCreateSteps();
+                              setPendingAction("create");
+                            }}
+                            disabled={
+                              isWorking ||
+                              !tokenA_Symbol ||
+                              !tokenB_Symbol ||
+                              (creationMode === "new"
+                                ? (!initWmst || !initUsdc || Number(initWmst) <= 0 || Number(initUsdc) <= 0)
+                                : ((!initWmst && !initUsdc) || (Number(initWmst) <= 0 && Number(initUsdc) <= 0))
+                              ) ||
+                              (creationMode === "existing" && !isPoolInitialized)
+                            }
+                            className={`flex-1 py-4 rounded-xl font-bold text-base tracking-wide transition-all active:scale-[0.98]
+                                                                ${isWorking ||
+                                !tokenA_Symbol ||
+                                !tokenB_Symbol ||
+                                (creationMode === "new"
+                                  ? (!initWmst || !initUsdc || Number(initWmst) <= 0 || Number(initUsdc) <= 0)
+                                  : ((!initWmst && !initUsdc) || (Number(initWmst) <= 0 && Number(initUsdc) <= 0))
+                                ) ||
+                                (creationMode === "existing" && !isPoolInitialized)
+                                ? isDark
+                                  ? "border border-zinc-800 bg-zinc-900/30 text-zinc-650 cursor-not-allowed"
+                                  : "border border-zinc-200 bg-zinc-50 text-zinc-400 cursor-not-allowed"
+                                : isDark
+                                  ? "bg-gradient-to-r from-cyan-500 via-blue-600 to-purple-600 hover:from-cyan-400 hover:via-blue-500 hover:to-purple-500 text-white shadow-lg shadow-cyan-500/25"
+                                  : "bg-gradient-to-r from-cyan-500 via-blue-600 to-purple-600 hover:brightness-110 text-white shadow-lg shadow-blue-500/20"
+                              }`}
+                          >
+                            {!tokenA_Symbol || !tokenB_Symbol
+                              ? "Select Tokens to Continue"
+                              : isWorking
+                                ? creationMode === "new" ? "Creating Pool..." : "Adding Position..."
+                                : creationMode === "new" ? "Create Pool" : "Add Position"
+                            }
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Dynamic transaction notifications */}

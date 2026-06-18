@@ -198,8 +198,13 @@ export async function getWalletPortfolioSnapshot({
     try {
       const wmstAddress = getContractAddress("wmst", targetChainId);
       const usdcAddress = getContractAddress("usdc", targetChainId);
+      const wmstToken = TOKENS.find((t) => t.symbol === "WMST");
+      const usdcToken = TOKENS.find((t) => t.symbol === "USDC");
+      const wmstDecimals = wmstToken?.decimals ?? 18;
+      const usdcDecimals = usdcToken?.decimals ?? 18;
+
       if (wmstAddress && usdcAddress) {
-        const oneUnitRaw = parseUnits("1", 18);
+        const oneUnitRaw = parseUnits("1", wmstDecimals);
         const { result } = await publicClient.simulateContract({
           address: getContractAddress("quoterV2", targetChainId),
           abi: ABIS.quoterV2,
@@ -216,7 +221,7 @@ export async function getWalletPortfolioSnapshot({
         });
 
         if (result) {
-          liveMstPrice = Number(formatUnits(result[0], 18));
+          liveMstPrice = Number(formatUnits(result[0], usdcDecimals));
         }
       }
     } catch (err) {
@@ -417,13 +422,18 @@ export async function getWalletPortfolioSnapshot({
     let usdcReserve = 0;
     let wmstReserve = 0;
 
+    const wmstToken = TOKENS.find((t) => t.symbol === "WMST");
+    const usdcToken = TOKENS.find((t) => t.symbol === "USDC");
+    const wmstDecimals = wmstToken?.decimals ?? 18;
+    const usdcDecimals = usdcToken?.decimals ?? 18;
+
     const isToken0Usdc = token0.toLowerCase() === getContractAddress("usdc", targetChainId).toLowerCase();
     if (isToken0Usdc) {
-      usdcReserve = amount0 / 1e18;
-      wmstReserve = amount1 / 1e18;
+      usdcReserve = amount0 / Math.pow(10, usdcDecimals);
+      wmstReserve = amount1 / Math.pow(10, wmstDecimals);
     } else {
-      wmstReserve = amount0 / 1e18;
-      usdcReserve = amount1 / 1e18;
+      wmstReserve = amount0 / Math.pow(10, wmstDecimals);
+      usdcReserve = amount1 / Math.pow(10, usdcDecimals);
     }
 
     const lpLiquidityUsd = wmstReserve * liveMstPrice + usdcReserve;
@@ -556,15 +566,18 @@ export async function getWalletPortfolioSnapshot({
             const wrapLog = receives.find(r => r.args && (r.args as any).from === '0x0000000000000000000000000000000000000000');
             const unwrapLog = sends.find(s => s.args && (s.args as any).to === '0x0000000000000000000000000000000000000000');
 
+            const wmstToken = TOKENS.find((t) => t.symbol === "WMST");
+            const wmstDecimals = wmstToken?.decimals ?? 18;
+
             if (wrapLog && wrapLog.address.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase()) {
               type = "swap";
               assetLabel = "MST → WMST";
-              amount = Number(formatUnits((wrapLog.args as any).value || 0n, 18));
+              amount = Number(formatUnits((wrapLog.args as any).value || 0n, wmstDecimals));
               amountUsd = amount * liveMstPrice;
             } else if (unwrapLog && unwrapLog.address.toLowerCase() === getContractAddress("wmst", targetChainId).toLowerCase()) {
               type = "swap";
               assetLabel = "WMST → MST";
-              amount = Number(formatUnits((unwrapLog.args as any).value || 0n, 18));
+              amount = Number(formatUnits((unwrapLog.args as any).value || 0n, wmstDecimals));
               amountUsd = amount * liveMstPrice;
             } else {
               let txObj = txCache.get(hash);

@@ -108,7 +108,8 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
   const targetPool = poolId || getContractAddress("pool");
   const wmstAddress = getContractAddress("wmst");
   const usdcAddress = getContractAddress("usdc");
-  const usdcDecimals = Number(import.meta.env.VITE_USDC_DECIMALS || 18);
+  const usdcDecimals = TOKENS.find((t) => t.symbol === "USDC")?.decimals ?? 18;
+  const wmstDecimals = TOKENS.find((t) => t.symbol === "WMST")?.decimals ?? 18;
 
   let liveMstPrice = 1.85;
   try {
@@ -118,8 +119,9 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
       functionName: "slot0"
     });
     if (slot0 && slot0[0] > 0n) {
+      const poolSqrtPriceX96 = BigInt(slot0[0]);
       const Q96 = 2n ** 96n;
-      const priceOfUsdcInWmst = (Number(slot0[0]) / Number(Q96)) ** 2;
+      const priceOfUsdcInWmst = (Number(poolSqrtPriceX96) / Number(Q96)) ** 2;
       if (priceOfUsdcInWmst > 0) {
         liveMstPrice = 1 / priceOfUsdcInWmst;
       }
@@ -145,8 +147,8 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
         args: [targetPool as Address]
       })
     ]);
-    wmstReserve = Number(formatUnits(wmstBal as bigint, 18));
-    usdcReserve = Number(formatUnits(usdcBal as bigint, 18));
+    wmstReserve = Number(formatUnits(wmstBal as bigint, wmstDecimals));
+    usdcReserve = Number(formatUnits(usdcBal as bigint, usdcDecimals));
   } catch (err) {
     console.error("Error reading pool reserves in explore page", err);
   }
@@ -277,8 +279,8 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
     if (amount0 !== undefined && amount1 !== undefined) {
       const wmstDec = isWmstToken0 ? amount0 : amount1;
       const usdcDec = isWmstToken0 ? amount1 : amount0;
-      const wmstAmt = Number(formatUnits(wmstDec, 18));
-      const usdcAmt = Number(formatUnits(usdcDec, 18));
+      const wmstAmt = Number(formatUnits(wmstDec, wmstDecimals));
+      const usdcAmt = Number(formatUnits(usdcDec, usdcDecimals));
       const usdValue = wmstAmt * liveMstPrice + usdcAmt;
       txs.push({ hash: log.transactionHash, blockNumber: log.blockNumber, type: "add", token0: "WMST", token1: "USDC", usd: usdValue, account: owner || "0x", timestamp: 0, amountIn: wmstAmt, amountOut: usdcAmt });
     }
@@ -289,8 +291,8 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
     if (amount0 !== undefined && amount1 !== undefined) {
       const wmstDec = isWmstToken0 ? amount0 : amount1;
       const usdcDec = isWmstToken0 ? amount1 : amount0;
-      const wmstAmt = Number(formatUnits(wmstDec, 18));
-      const usdcAmt = Number(formatUnits(usdcDec, 18));
+      const wmstAmt = Number(formatUnits(wmstDec, wmstDecimals));
+      const usdcAmt = Number(formatUnits(usdcDec, usdcDecimals));
       const usdValue = wmstAmt * liveMstPrice + usdcAmt;
       txs.push({ hash: log.transactionHash, blockNumber: log.blockNumber, type: "remove", token0: "WMST", token1: "USDC", usd: usdValue, account: owner || "0x", timestamp: 0, amountIn: wmstAmt, amountOut: usdcAmt });
     }
@@ -299,7 +301,7 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
   for (const log of depositLogs) {
     const { dst, wad } = log.args;
     if (wad !== undefined) {
-      const wadAmt = Number(formatUnits(wad, 18));
+      const wadAmt = Number(formatUnits(wad, wmstDecimals));
       const usdValue = wadAmt * liveMstPrice;
       txs.push({ hash: log.transactionHash, blockNumber: log.blockNumber, type: "wrap", token0: "tMST", token1: "WMST", usd: usdValue, account: dst || "0x", timestamp: 0, amountIn: wadAmt, amountOut: wadAmt });
     }
@@ -308,7 +310,7 @@ async function fetchExploreData(range: "1H" | "1D" | "1W" | "1M"): Promise<Explo
   for (const log of withdrawalLogs) {
     const { src, wad } = log.args;
     if (wad !== undefined) {
-      const wadAmt = Number(formatUnits(wad, 18));
+      const wadAmt = Number(formatUnits(wad, wmstDecimals));
       const usdValue = wadAmt * liveMstPrice;
       txs.push({ hash: log.transactionHash, blockNumber: log.blockNumber, type: "unwrap", token0: "WMST", token1: "tMST", usd: usdValue, account: src || "0x", timestamp: 0, amountIn: wadAmt, amountOut: wadAmt });
     }

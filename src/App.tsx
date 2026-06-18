@@ -17,7 +17,7 @@ import PoolDetailsPage from "./pages/PoolDetailsPage";
 import TokenDetailsPage from "./pages/TokenDetailsPage";
 import { ToastContainer } from "./components/ui/ToastContainer";
 
-import { Menu, X, Sun, Moon, Wallet, CheckCircle2, AlertCircle, Power, PlugZap, ExternalLink, ChevronDown } from "lucide-react";
+import { Menu, X, Sun, Moon, Wallet, CheckCircle2, AlertCircle, Power, PlugZap, ExternalLink, ChevronDown, Plus, Layers, ChevronRight } from "lucide-react";
 import { useThemeStore } from "./store/themeStore";
 import { mstChain } from "./config/chains";
 
@@ -133,17 +133,28 @@ function Navigation() {
                     >
                       {link.label} <ChevronDown size={14} className="opacity-70 group-hover:opacity-100 transition-opacity" />
                     </button>
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-0 w-44 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(20,20,25,0.85)] backdrop-blur-2xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 overflow-hidden flex flex-col p-1.5 z-50">
-                      {link.subLinks.map(subLink => (
-                        <Link
-                          key={subLink.to}
-                          to={subLink.to}
-                          className="px-4 py-3 rounded-xl text-[14px] text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-                        >
-                          {subLink.label}
-                        </Link>
-                      ))}
-                    </div>
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-3 w-48 rounded-[20px] border border-zinc-800/80 bg-zinc-950/95 shadow-[0_15px_40px_rgba(0,0,0,0.6)] backdrop-blur-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-300 transform translate-y-2 group-hover:translate-y-0 overflow-hidden flex flex-col p-1.5 z-50">
+                       {link.subLinks.map(subLink => (
+                         <Link
+                           key={subLink.to}
+                           to={subLink.to}
+                           className="group/item flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13.5px] font-semibold text-zinc-400 hover:text-white hover:bg-white/5 transition-all duration-200"
+                         >
+                           <span className="flex items-center gap-2.5 transition-transform duration-200 group-hover/item:translate-x-0.5">
+                             {subLink.label.toLowerCase().includes("create") ? (
+                               <Plus size={14} className="text-zinc-500 group-hover/item:text-cyan-400 transition-colors" />
+                             ) : (
+                               <Layers size={14} className="text-zinc-500 group-hover/item:text-cyan-400 transition-colors" />
+                             )}
+                             {subLink.label}
+                           </span>
+                           <ChevronRight
+                             size={12}
+                             className="opacity-0 -translate-x-1 group-hover/item:opacity-75 group-hover/item:translate-x-0 transition-all duration-200 text-zinc-400"
+                           />
+                         </Link>
+                       ))}
+                     </div>
                   </div>
                 );
               }

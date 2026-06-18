@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Search, Check } from "lucide-react";
 import { TokenLogo } from "./TokenLogos";
-import { displayTokenSymbol } from "../../config/contracts";
+import { displayTokenSymbol, TOKENS } from "../../config/contracts";
 
 export interface TokenInfo {
   symbol: string;
@@ -12,8 +12,11 @@ export interface TokenInfo {
 
 const ALL_TOKENS: TokenInfo[] = [
   { symbol: "MST", name: "tMST Native Token", decimals: 18 },
-  { symbol: "WMST", name: "Wrapped MST", decimals: 18 },
-  { symbol: "USDC", name: "USD Coin", decimals: 18 },
+  ...TOKENS.map((t) => ({
+    symbol: t.symbol,
+    name: t.name,
+    decimals: t.decimals
+  }))
 ];
 
 const POPULAR_TOKENS = ["MST", "WMST", "USDC"];

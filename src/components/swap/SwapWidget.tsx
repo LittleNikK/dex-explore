@@ -2,9 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Settings, ChevronDown, ArrowDown, Info, Loader2, Sparkles, CheckCircle2, ExternalLink, XCircle, X } from "lucide-react";
-import { formatUnits, parseUnits, type Address, decodeEventLog } from "viem";
+import { formatUnits, parseUnits, type Address, decodeEventLog, encodePacked } from "viem";
 import { useAccount, useChainId, usePublicClient, useSwitchChain, useWriteContract, useBalance } from "wagmi";
-import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, swapEventAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE } from "../../config/contracts";
+import { getToken, displayTokenSymbol, CONTRACTS, erc20Abi, quoterV2Abi, swapRouterAbi, uniswapV3FactoryAbi, swapEventAbi, V3_FEE, ZERO_SQRT_PRICE_LIMIT, API_BASE, TOKENS } from "../../config/contracts";
 import { swapService } from "../../services/swap.service";
 import { mstChain } from "../../config/chains";
 import { useSwapStore } from "../../store/swapStore";
@@ -32,6 +32,145 @@ interface CustomParticle {
   color: string;
   size: number;
   alpha: number;
+}
+
+interface RouteDetailsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  bestRoute: {
+    routeType: "single" | "multi" | "wrap" | "unwrap" | null;
+    fee?: number;
+    fees?: number[];
+    path?: Address;
+    outputAmount: bigint;
+    tokenMid?: Address;
+  } | null;
+  tokenIn: string;
+  tokenOut: string;
+  theme: "light" | "dark";
+}
+
+function RouteDetailsModal({ isOpen, onClose, bestRoute, tokenIn, tokenOut, theme }: RouteDetailsModalProps) {
+  if (!isOpen || !bestRoute) return null;
+  const isDark = theme === "dark";
+
+  const pathTokens = useMemo(() => {
+    if (bestRoute.routeType === "wrap") {
+      return ["MST", "WMST"];
+    }
+    if (bestRoute.routeType === "unwrap") {
+      return ["WMST", "MST"];
+    }
+    if (bestRoute.routeType === "single") {
+      return [tokenIn, tokenOut];
+    }
+    if (bestRoute.routeType === "multi" && bestRoute.tokenMid) {
+      const tokenMidAddress = bestRoute.tokenMid;
+      const midToken = TOKENS.find(t => t.address?.toLowerCase() === tokenMidAddress.toLowerCase());
+      return [tokenIn, midToken?.symbol || "USDC", tokenOut];
+    }
+    return [tokenIn, tokenOut];
+  }, [bestRoute, tokenIn, tokenOut]);
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        />
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+          className={`w-full max-w-[400px] p-6 rounded-[24px] border shadow-2xl relative z-10 overflow-hidden
+            ${isDark ? "bg-[#0f0f1b]/95 border-zinc-800 text-white" : "bg-white border-zinc-200 text-zinc-950"}`}
+        >
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-display font-bold text-lg tracking-tight flex items-center gap-2">
+              <Sparkles size={16} className="text-cyan-400" />
+              Routing Details
+            </h3>
+            <button
+              onClick={onClose}
+              className={`p-1.5 rounded-lg transition-colors border-none bg-transparent cursor-pointer
+                ${isDark ? "hover:bg-white/10 text-zinc-400 hover:text-white" : "hover:bg-zinc-100 text-zinc-500 hover:text-zinc-900"}`}
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          <p className={`text-xs leading-relaxed mb-6 font-bold ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+            Your trade is routed via the path below to secure the maximum output rate and lowest price impact.
+          </p>
+
+          <div className="relative flex items-center justify-between py-6 px-3 mb-6 bg-zinc-500/5 rounded-2xl border border-zinc-500/10">
+            {pathTokens.map((tokenSymbol, index) => {
+              const isLast = index === pathTokens.length - 1;
+              return (
+                <React.Fragment key={tokenSymbol}>
+                  <div className="flex flex-col items-center gap-1.5 z-10">
+                    <div className={`w-12 h-12 flex items-center justify-center rounded-full border shadow-md
+                      ${isDark ? "bg-[#181930] border-zinc-800" : "bg-white border-zinc-200"}`}
+                    >
+                      <TokenLogo symbol={tokenSymbol} size={28} />
+                    </div>
+                    <span className="text-xs font-mono font-bold">{displayTokenSymbol(tokenSymbol)}</span>
+                  </div>
+
+                  {!isLast && (
+                    <div className="flex-1 relative flex flex-col items-center justify-center mx-1">
+                      <span className={`text-[10px] font-mono font-bold py-0.5 px-1.5 rounded bg-cyan-400/10 text-cyan-400 mb-1 border border-cyan-400/20`}>
+                        {bestRoute.routeType === "multi" && bestRoute.fees
+                          ? `${(bestRoute.fees[index] / 10000).toFixed(2)}%`
+                          : bestRoute.routeType === "single" && bestRoute.fee !== undefined
+                            ? `${(bestRoute.fee / 10000).toFixed(2)}%`
+                            : "0%"}
+                      </span>
+                      <div className="w-full h-0.5 bg-zinc-800 relative overflow-hidden">
+                        <motion.div
+                          animate={{ x: ["-100%", "100%"] }}
+                          transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                          className="absolute inset-0 bg-gradient-to-r from-transparent via-cyan-400 to-transparent"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+
+          <div className="space-y-2.5">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-zinc-500 font-bold">Router Type:</span>
+              <span className="font-mono font-bold text-cyan-400 capitalize">
+                {bestRoute.routeType === "single" ? "V3 Single Hop" : bestRoute.routeType === "multi" ? "V3 Multi-Hop" : bestRoute.routeType}
+              </span>
+            </div>
+            {bestRoute.routeType === "multi" && bestRoute.tokenMid && (
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-zinc-500 font-bold">Intermediate Hop:</span>
+                <span className={`font-mono text-[10px] font-bold p-1 rounded bg-zinc-800/40 ${isDark ? "text-zinc-300" : "text-zinc-700"}`}>
+                  {bestRoute.tokenMid.substring(0, 6)}...{bestRoute.tokenMid.substring(38)}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-zinc-500 font-bold">Best Output Rate:</span>
+              <span className="font-mono font-bold text-emerald-400">
+                {Number(formatUnits(bestRoute.outputAmount, bestRoute.routeType === "wrap" ? 18 : (bestRoute.routeType === "unwrap" ? 18 : (TOKENS.find(t => t.symbol === tokenOut)?.decimals ?? 18)))).toFixed(4)} {displayTokenSymbol(tokenOut)}
+              </span>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
 }
 
 export function SwapWidget({ theme }: SwapWidgetProps) {
@@ -76,6 +215,15 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const [statusText, setStatusText] = useState("");
   const [txHash, setTxHash] = useState("");
   const [quotedOut, setQuotedOut] = useState<bigint | null>(null);
+  const [bestRoute, setBestRoute] = useState<{
+    routeType: "single" | "multi" | "wrap" | "unwrap" | null;
+    fee?: number;
+    fees?: number[];
+    path?: Address;
+    outputAmount: bigint;
+    tokenMid?: Address;
+  } | null>(null);
+  const [routeDetailsOpen, setRouteDetailsOpen] = useState(false);
 
   interface SwapStep {
     id: "wrap" | "approve" | "swap" | "unwrap";
@@ -138,9 +286,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       try {
         const wmstAddress = CONTRACTS.wmst;
         const usdcAddress = CONTRACTS.usdc;
+        const wmstToken = getToken("WMST");
+        const usdcToken = getToken("USDC");
+        const wmstDecimals = wmstToken?.decimals ?? 18;
+        const usdcDecimals = usdcToken?.decimals ?? 18;
         if (!wmstAddress || !usdcAddress) return;
 
-        const oneUnitRaw = parseUnits("1", 18);
+        const oneUnitRaw = parseUnits("1", wmstDecimals);
         const { result } = await c.simulateContract({
           address: CONTRACTS.quoterV2,
           abi: quoterV2Abi,
@@ -158,7 +310,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
         if (active && result) {
           const outRaw = result[0];
-          const price = Number(formatUnits(outRaw, 18));
+          const price = Number(formatUnits(outRaw, usdcDecimals));
           setLiveMstPrice(price);
         }
       } catch (err) {
@@ -404,6 +556,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     if (!isReadyAmount || !publicClient || !inputToken || !outputToken) {
       setQuotedOut(null);
       setAmountOut("");
+      setBestRoute(null);
       return;
     }
 
@@ -411,8 +564,13 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       (tokenIn === "MST" && tokenOut === "WMST") ||
       (tokenIn === "WMST" && tokenOut === "MST")
     ) {
+      const amtOut = parseUnits(amountIn, outputToken?.decimals ?? 18);
       setAmountOut(amountIn);
-      setQuotedOut(parseUnits(amountIn, 18));
+      setQuotedOut(amtOut);
+      setBestRoute({
+        routeType: tokenIn === "MST" ? "wrap" : "unwrap",
+        outputAmount: amtOut
+      });
       return;
     }
 
@@ -423,31 +581,136 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         const quoteOutAddress = (tokenOut === "MST" ? CONTRACTS.wmst : outputToken.address) as Address;
         const amountRaw = parseUnits(amountIn, inputToken.decimals);
 
-        // Query QuoterV2 directly via viem client simulation
-        const { result } = await publicClient.simulateContract({
-          address: CONTRACTS.quoterV2,
-          abi: quoterV2Abi,
-          functionName: "quoteExactInputSingle",
-          args: [
-            {
-              tokenIn: quoteInAddress,
-              tokenOut: quoteOutAddress,
-              amountIn: amountRaw,
-              fee: V3_FEE,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ]
-        });
+        if (!quoteInAddress || !quoteOutAddress) return;
 
-        if (active && result) {
-          const outRaw = result[0];
-          setQuotedOut(outRaw);
-          setAmountOut(formatUnits(outRaw, outputToken.decimals));
+        // Build list of candidate paths across all standard V3 fee tiers
+        const feeTiers = [100, 500, 3000, 10000];
+        const candidates: Array<{
+          routeType: "single" | "multi";
+          fee?: number;
+          fees?: number[];
+          path: Address;
+          tokenIn: Address;
+          tokenOut: Address;
+          tokenMid?: Address;
+        }> = [];
+
+        // 1. Direct paths
+        for (const fee of feeTiers) {
+          candidates.push({
+            routeType: "single",
+            fee,
+            path: encodePacked(["address", "uint24", "address"], [quoteInAddress, fee, quoteOutAddress]),
+            tokenIn: quoteInAddress,
+            tokenOut: quoteOutAddress
+          });
+        }
+
+        // 2. Multi-hop paths (only if not swapping between the two base tokens directly)
+        const baseTokens = [CONTRACTS.wmst, CONTRACTS.usdc].filter(Boolean) as Address[];
+        const isDirectBaseSwap =
+          baseTokens.some(b => b.toLowerCase() === quoteInAddress.toLowerCase()) &&
+          baseTokens.some(b => b.toLowerCase() === quoteOutAddress.toLowerCase());
+
+        if (!isDirectBaseSwap) {
+          for (const baseToken of baseTokens) {
+            if (
+              baseToken.toLowerCase() !== quoteInAddress.toLowerCase() &&
+              baseToken.toLowerCase() !== quoteOutAddress.toLowerCase()
+            ) {
+              for (const fee1 of feeTiers) {
+                for (const fee2 of feeTiers) {
+                  candidates.push({
+                    routeType: "multi",
+                    fees: [fee1, fee2],
+                    path: encodePacked(
+                      ["address", "uint24", "address", "uint24", "address"],
+                      [quoteInAddress, fee1, baseToken, fee2, quoteOutAddress]
+                    ),
+                    tokenIn: quoteInAddress,
+                    tokenMid: baseToken,
+                    tokenOut: quoteOutAddress
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Query quotes for all candidates concurrently
+        const quotes = await Promise.all(
+          candidates.map(async (c) => {
+            try {
+              if (c.routeType === "single") {
+                const { result } = await publicClient.simulateContract({
+                  address: CONTRACTS.quoterV2,
+                  abi: quoterV2Abi,
+                  functionName: "quoteExactInputSingle",
+                  args: [
+                    {
+                      tokenIn: c.tokenIn,
+                      tokenOut: c.tokenOut,
+                      amountIn: amountRaw,
+                      fee: c.fee!,
+                      sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+                    }
+                  ]
+                });
+                return {
+                  ...c,
+                  outputAmount: result ? (result[0] as bigint) : 0n
+                };
+              } else {
+                const { result } = await publicClient.simulateContract({
+                  address: CONTRACTS.quoterV2,
+                  abi: quoterV2Abi,
+                  functionName: "quoteExactInput",
+                  args: [c.path, amountRaw]
+                });
+                return {
+                  ...c,
+                  outputAmount: result ? (result[0] as bigint) : 0n
+                };
+              }
+            } catch (err) {
+              // Pool does not exist or has no liquidity
+              return {
+                ...c,
+                outputAmount: 0n
+              };
+            }
+          })
+        );
+
+        if (!active) return;
+
+        // Find candidate with maximum outputAmount
+        let best = quotes.reduce((max, current) => {
+          return current.outputAmount > max.outputAmount ? current : max;
+        }, { outputAmount: 0n } as typeof quotes[0] & { outputAmount: bigint });
+
+        if (best.outputAmount > 0n) {
+          setBestRoute({
+            routeType: best.routeType,
+            fee: best.fee,
+            fees: best.fees,
+            path: best.path,
+            outputAmount: best.outputAmount,
+            tokenMid: best.tokenMid
+          });
+          setQuotedOut(best.outputAmount);
+          setAmountOut(formatUnits(best.outputAmount, outputToken.decimals));
+        } else {
+          setBestRoute(null);
+          setQuotedOut(null);
+          setAmountOut("");
         }
       } catch (err) {
+        console.error("Error finding best route:", err);
         if (active) {
-          setAmountOut("");
+          setBestRoute(null);
           setQuotedOut(null);
+          setAmountOut("");
         }
       }
     }, 400);
@@ -469,6 +732,18 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
     const rate = Number(amountOut) / Number(amountIn);
     return `1 ${displayTokenSymbol(tokenIn)} = ${rate.toFixed(6).replace(/\.?0+$/, "")} ${displayTokenSymbol(tokenOut)}`;
   }, [tokenIn, tokenOut, amountIn, amountOut, liveMstPrice]);
+
+  const feeDisplayString = useMemo(() => {
+    if (!bestRoute) return "Fee: --";
+    if (bestRoute.routeType === "wrap" || bestRoute.routeType === "unwrap") return "Fee: 0%";
+    if (bestRoute.routeType === "single" && bestRoute.fee !== undefined) {
+      return `Fee: ${(bestRoute.fee / 10000).toFixed(2)}%`;
+    }
+    if (bestRoute.routeType === "multi" && bestRoute.fees) {
+      return `Route Fee: ${(bestRoute.fees[0] / 10000).toFixed(2)}% + ${(bestRoute.fees[1] / 10000).toFixed(2)}%`;
+    }
+    return "Fee: --";
+  }, [bestRoute]);
 
   // Flip elements with advanced crossover transition
   const handleFlipTokens = () => {
@@ -581,7 +856,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setStatusText("Confirming Wrap on MST Blockchain...");
         await publicClient.waitForTransactionReceipt({ hash });
         setStatusText("Wrap confirmed!");
-        
+
         // Direct MST -> WMST wrap completes here
         if (tokenIn === "MST" && tokenOut === "WMST") {
           triggerSuccessParticles();
@@ -638,6 +913,12 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           return;
         }
 
+        if (!bestRoute) {
+          setStatusText("No route found.");
+          setIsWorking(false);
+          return;
+        }
+
         setStatusText("Confirm swap transaction in wallet...");
         const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * deadlineMins);
         const estimatedOut = quotedOut || parseUnits(amountOut, outputToken?.decimals ?? 18);
@@ -646,100 +927,217 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         const swapInAddress = (tokenIn === "MST" ? CONTRACTS.wmst : inputToken?.address) as Address;
         const swapOutAddress = (tokenOut === "MST" ? CONTRACTS.wmst : outputToken?.address) as Address;
 
-        console.log("exactInputSingle swap execution:", {
-          tokenIn: swapInAddress,
-          tokenOut: swapOutAddress,
-          amountIn: amountRaw.toString(),
-          amountOutMinimum: amountOutMinimum.toString(),
-          slippageBps,
-          deadline: deadline.toString()
-        });
+        let hash: Address;
 
-        const hash = await writeContractAsync({
-          address: CONTRACTS.swapRouter,
-          abi: swapRouterAbi,
-          functionName: "exactInputSingle",
-          args: [
-            {
-              tokenIn: swapInAddress,
-              tokenOut: swapOutAddress,
-              fee: V3_FEE,
-              recipient: address,
-              deadline,
-              amountIn: amountRaw,
-              amountOutMinimum,
-              sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
-            }
-          ],
-          value: 0n
-        });
+        if (bestRoute.routeType === "single") {
+          console.log("exactInputSingle swap execution:", {
+            tokenIn: swapInAddress,
+            tokenOut: swapOutAddress,
+            fee: bestRoute.fee,
+            amountIn: amountRaw.toString(),
+            amountOutMinimum: amountOutMinimum.toString(),
+            slippageBps,
+            deadline: deadline.toString()
+          });
+
+          hash = await writeContractAsync({
+            address: CONTRACTS.swapRouter,
+            abi: swapRouterAbi,
+            functionName: "exactInputSingle",
+            args: [
+              {
+                tokenIn: swapInAddress,
+                tokenOut: swapOutAddress,
+                fee: bestRoute.fee!,
+                recipient: address,
+                deadline,
+                amountIn: amountRaw,
+                amountOutMinimum,
+                sqrtPriceLimitX96: ZERO_SQRT_PRICE_LIMIT
+              }
+            ],
+            value: 0n
+          });
+        } else if (bestRoute.routeType === "multi") {
+          console.log("exactInput multi-hop swap execution:", {
+            path: bestRoute.path,
+            tokenIn: swapInAddress,
+            tokenOut: swapOutAddress,
+            amountIn: amountRaw.toString(),
+            amountOutMinimum: amountOutMinimum.toString(),
+            slippageBps,
+            deadline: deadline.toString()
+          });
+
+          hash = await writeContractAsync({
+            address: CONTRACTS.swapRouter,
+            abi: swapRouterAbi,
+            functionName: "exactInput",
+            args: [
+              {
+                path: bestRoute.path!,
+                recipient: address,
+                deadline,
+                amountIn: amountRaw,
+                amountOutMinimum
+              }
+            ],
+            value: 0n
+          });
+        } else {
+          setStatusText("Invalid route type.");
+          setIsWorking(false);
+          return;
+        }
 
         setTxHash(hash);
         setStatusText("Submitting to MST Blockchain Node...");
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        
+
+        let finalSwappedIn = amountIn;
+        let finalSwappedOut = amountOut;
+
         // Log swap to backend database
         try {
-          const poolAddress = await publicClient.readContract({
-            address: CONTRACTS.factory,
-            abi: uniswapV3FactoryAbi,
-            functionName: "getPool",
-            args: [swapInAddress, swapOutAddress, V3_FEE]
-          }) as string;
-
-          let rawAmountIn = amountRaw.toString();
-          let rawAmountOut = estimatedOut.toString();
-
-          if (receipt && receipt.logs) {
-            for (const log of receipt.logs) {
-              try {
-                const decoded = decodeEventLog({
-                  abi: swapEventAbi,
-                  data: log.data,
-                  topics: log.topics
-                });
-                if (decoded.eventName === "Swap") {
-                  const amt0 = BigInt(decoded.args.amount0.toString());
-                  const amt1 = BigInt(decoded.args.amount1.toString());
-                  const isWmstToken0 = swapInAddress.toLowerCase() < swapOutAddress.toLowerCase();
-                  
-                  if (isWmstToken0) {
-                    rawAmountIn = amt0 > 0n ? amt0.toString() : (-amt0).toString();
-                    rawAmountOut = amt1 < 0n ? (-amt1).toString() : amt1.toString();
-                  } else {
-                    rawAmountIn = amt1 > 0n ? amt1.toString() : (-amt1).toString();
-                    rawAmountOut = amt0 < 0n ? (-amt0).toString() : amt0.toString();
-                  }
-                  break;
-                }
-              } catch (e) {
-                // Ignore decoding errors
-              }
-            }
+          const hopsToLog: Array<{
+            tokenIn: Address;
+            tokenOut: Address;
+            poolAddress: Address;
+            estimatedIn: bigint;
+            estimatedOut: bigint;
+          }> = [];
+          if (bestRoute.routeType === "single") {
+            const poolAddress = await publicClient.readContract({
+              address: CONTRACTS.factory,
+              abi: uniswapV3FactoryAbi,
+              functionName: "getPool",
+              args: [swapInAddress, swapOutAddress, bestRoute.fee!]
+            }) as Address;
+            hopsToLog.push({
+              tokenIn: swapInAddress,
+              tokenOut: swapOutAddress,
+              poolAddress,
+              estimatedIn: amountRaw,
+              estimatedOut: amountOutMinimum
+            });
+          } else if (bestRoute.routeType === "multi" && bestRoute.tokenMid) {
+            const poolAddress1 = await publicClient.readContract({
+              address: CONTRACTS.factory,
+              abi: uniswapV3FactoryAbi,
+              functionName: "getPool",
+              args: [swapInAddress, bestRoute.tokenMid, bestRoute.fees![0]]
+            }) as Address;
+            const poolAddress2 = await publicClient.readContract({
+              address: CONTRACTS.factory,
+              abi: uniswapV3FactoryAbi,
+              functionName: "getPool",
+              args: [bestRoute.tokenMid, swapOutAddress, bestRoute.fees![1]]
+            }) as Address;
+            hopsToLog.push({
+              tokenIn: swapInAddress,
+              tokenOut: bestRoute.tokenMid,
+              poolAddress: poolAddress1,
+              estimatedIn: amountRaw,
+              estimatedOut: 0n
+            });
+            hopsToLog.push({
+              tokenIn: bestRoute.tokenMid,
+              tokenOut: swapOutAddress,
+              poolAddress: poolAddress2,
+              estimatedIn: 0n,
+              estimatedOut: amountOutMinimum
+            });
           }
 
-          const decIn = tokenIn === "MST" ? 18 : inputToken?.decimals ?? 18;
-          const decOut = tokenOut === "MST" ? 18 : outputToken?.decimals ?? 18;
-          
-          const amountInFormatted = Number(formatUnits(BigInt(rawAmountIn), decIn));
-          const amountOutFormatted = Number(formatUnits(BigInt(rawAmountOut), decOut));
+          let overallAmountInFormatted = amountIn;
+          let overallAmountOutFormatted = amountOut;
 
-          const isWmstToken0 = swapInAddress.toLowerCase() < swapOutAddress.toLowerCase();
-          const swapPrice = isWmstToken0 
-            ? (amountInFormatted > 0 ? amountOutFormatted / amountInFormatted : 0)
-            : (amountOutFormatted > 0 ? amountInFormatted / amountOutFormatted : 0);
+          for (let i = 0; i < hopsToLog.length; i++) {
+            const hop = hopsToLog[i];
 
-          await swapService.recordSwap({
-            walletAddress: address!,
-            poolAddress,
-            tokenIn: swapInAddress.toLowerCase(),
-            tokenOut: swapOutAddress.toLowerCase(),
-            amountIn: rawAmountIn,
-            amountOut: rawAmountOut,
-            txHash: hash,
-            chainId: chainId!,
-            price: swapPrice,
-          });
+            let rawAmountIn = 0n;
+            let rawAmountOut = 0n;
+
+            if (receipt && receipt.logs) {
+              for (const log of receipt.logs) {
+                if (log.address.toLowerCase() === hop.poolAddress.toLowerCase()) {
+                  try {
+                    const decoded = decodeEventLog({
+                      abi: swapEventAbi,
+                      data: log.data,
+                      topics: log.topics
+                    });
+                    if (decoded.eventName === "Swap") {
+                      const amt0 = BigInt(decoded.args.amount0.toString());
+                      const amt1 = BigInt(decoded.args.amount1.toString());
+                      const isWmstToken0 = hop.tokenIn.toLowerCase() < hop.tokenOut.toLowerCase();
+
+                      if (isWmstToken0) {
+                        rawAmountIn = amt0 > 0n ? amt0 : -amt0;
+                        rawAmountOut = amt1 < 0n ? -amt1 : amt1;
+                      } else {
+                        rawAmountIn = amt1 > 0n ? amt1 : -amt1;
+                        rawAmountOut = amt0 < 0n ? -amt0 : amt0;
+                      }
+                      break;
+                    }
+                  } catch (e) {
+                    // Ignore decoding errors
+                  }
+                }
+              }
+            }
+
+            const finalAmtIn = rawAmountIn > 0n ? rawAmountIn : hop.estimatedIn;
+            const finalAmtOut = rawAmountOut > 0n ? rawAmountOut : hop.estimatedOut;
+
+            const hopTokenIn = TOKENS.find(t => t.address?.toLowerCase() === hop.tokenIn.toLowerCase());
+            const hopTokenOut = TOKENS.find(t => t.address?.toLowerCase() === hop.tokenOut.toLowerCase());
+            const decIn = hopTokenIn?.decimals ?? 18;
+            const decOut = hopTokenOut?.decimals ?? 18;
+
+            const formattedIn = formatUnits(finalAmtIn, decIn);
+            const formattedOut = formatUnits(finalAmtOut, decOut);
+
+            if (i === 0) {
+              overallAmountInFormatted = formattedIn;
+            }
+            if (i === hopsToLog.length - 1) {
+              overallAmountOutFormatted = formattedOut;
+            }
+
+            const isWmstToken0 = hop.tokenIn.toLowerCase() < hop.tokenOut.toLowerCase();
+            const amountInNum = Number(formattedIn);
+            const amountOutNum = Number(formattedOut);
+            const swapPrice = isWmstToken0
+              ? (amountInNum > 0 ? amountOutNum / amountInNum : 0)
+              : (amountOutNum > 0 ? amountInNum / amountOutNum : 0);
+
+            console.log(`Recording hop ${i + 1} swap:`, {
+              poolAddress: hop.poolAddress,
+              tokenIn: hop.tokenIn,
+              tokenOut: hop.tokenOut,
+              amountIn: finalAmtIn.toString(),
+              amountOut: finalAmtOut.toString(),
+              price: swapPrice
+            });
+
+            await swapService.recordSwap({
+              walletAddress: address!,
+              poolAddress: hop.poolAddress,
+              tokenIn: hop.tokenIn.toLowerCase(),
+              tokenOut: hop.tokenOut.toLowerCase(),
+              amountIn: finalAmtIn.toString(),
+              amountOut: finalAmtOut.toString(),
+              txHash: hash,
+              chainId: chainId!,
+              price: swapPrice,
+            });
+          }
+
+          finalSwappedIn = overallAmountInFormatted;
+          finalSwappedOut = overallAmountOutFormatted;
+          setAmountOut(overallAmountOutFormatted);
         } catch (backendErr) {
           console.error("Failed to log swap to backend:", backendErr);
         }
@@ -752,7 +1150,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             open: true,
             type: "success",
             title: "Swap Confirmed!",
-            description: `Successfully swapped ${amountIn} ${tokenIn} for ${amountOut} ${tokenOut}.`,
+            description: `Successfully swapped ${finalSwappedIn} ${tokenIn} for ${finalSwappedOut} ${tokenOut}.`,
             txHash: hash
           });
           setAmountIn("");
@@ -771,7 +1169,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
 
       else if (activeStep.id === "unwrap") {
         setStatusText("Confirming unwrap withdrawal in wallet...");
-        const estimatedOut = quotedOut || parseUnits(amountOut, 18);
+        const estimatedOut = quotedOut || parseUnits(amountOut, outputToken?.decimals ?? 18);
         const hash = await writeContractAsync({
           address: CONTRACTS.wmst,
           abi: [
@@ -790,7 +1188,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setTxHash(hash);
         setStatusText("Confirming Unwrap on MST Blockchain...");
         await publicClient.waitForTransactionReceipt({ hash });
-        
+
         setStatusText("Swap confirmed!");
         triggerSuccessParticles();
         setToast({
@@ -812,7 +1210,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       const shortMsg = message.includes("reverted")
         ? "Swap reverted. Check liquidity pools."
         : message.substring(0, 80);
-      
+
       setStatusText(shortMsg);
       setToast({
         open: true,
@@ -1123,9 +1521,22 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
               <Info size={12} className="opacity-70 text-cyan-400" />
               {exchangeRateString}
             </span>
-            <span className={`text-xs font-bold font-mono ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
-              Concentrated Pool Fee: 0.3%
-            </span>
+            <button
+              onClick={() => setRouteDetailsOpen(true)}
+              disabled={!bestRoute || bestRoute.routeType === "wrap" || bestRoute.routeType === "unwrap"}
+              className={`text-xs font-bold font-mono flex items-center gap-1 hover:underline transition-colors outline-none border-none bg-transparent cursor-pointer
+                ${!bestRoute || bestRoute.routeType === "wrap" || bestRoute.routeType === "unwrap"
+                  ? "text-zinc-500 cursor-default"
+                  : isDark
+                    ? "text-zinc-400 hover:text-cyan-400"
+                    : "text-zinc-500 hover:text-cyan-600"
+                }`}
+            >
+              <span>{feeDisplayString}</span>
+              {bestRoute && bestRoute.routeType !== "wrap" && bestRoute.routeType !== "unwrap" && (
+                <ChevronDown size={12} className="opacity-60" />
+              )}
+            </button>
           </motion.div>
         )}
 
@@ -1189,6 +1600,16 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         theme={theme}
       />
 
+      {/* Route Details Modal */}
+      <RouteDetailsModal
+        isOpen={routeDetailsOpen}
+        onClose={() => setRouteDetailsOpen(false)}
+        bestRoute={bestRoute}
+        tokenIn={tokenIn}
+        tokenOut={tokenOut}
+        theme={theme}
+      />
+
       {/* Premium custom top-right Toast notification (Tostify style) */}
       <AnimatePresence>
         {toast.open && (
@@ -1198,8 +1619,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             exit={{ opacity: 0, y: -20, x: 20, scale: 0.95 }}
             transition={{ type: "spring", damping: 22, stiffness: 200 }}
             className={`fixed top-24 right-6 z-[999] p-4 rounded-2xl shadow-2xl border w-full max-w-[360px] text-white backdrop-blur-md
-              ${toast.type === "success" 
-                ? "bg-[#0c0c16]/95 border-emerald-500/30 shadow-[0_10px_30px_rgba(0,0,0,0.8),0_0_20px_rgba(16,185,129,0.1)]" 
+              ${toast.type === "success"
+                ? "bg-[#0c0c16]/95 border-emerald-500/30 shadow-[0_10px_30px_rgba(0,0,0,0.8),0_0_20px_rgba(16,185,129,0.1)]"
                 : "bg-[#180a0a]/95 border-rose-500/30 shadow-[0_10px_30px_rgba(0,0,0,0.8),0_0_20px_rgba(244,63,94,0.1)]"
               }`}
           >
@@ -1209,7 +1630,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
               >
                 {toast.type === "success" ? <CheckCircle2 size={20} /> : <XCircle size={20} />}
               </div>
-              
+
               <div className="flex-1 pr-4">
                 <h4 className="font-display font-bold text-sm tracking-wide">
                   {toast.title}
