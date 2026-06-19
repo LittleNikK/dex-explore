@@ -3,21 +3,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { X, Search, Check } from "lucide-react";
 import { TokenLogo } from "./TokenLogos";
 import { displayTokenSymbol, TOKENS } from "../../config/contracts";
+import { useTokens } from "../../hooks/api";
 
 export interface TokenInfo {
   symbol: string;
   name: string;
   decimals: number;
 }
-
-const ALL_TOKENS: TokenInfo[] = [
-  { symbol: "MST", name: "tMST Native Token", decimals: 18 },
-  ...TOKENS.map((t) => ({
-    symbol: t.symbol,
-    name: t.name,
-    decimals: t.decimals
-  }))
-];
 
 const POPULAR_TOKENS = ["MST", "WMST", "USDC"];
 
@@ -39,6 +31,38 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
   excludeTokens,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
+  const { data: backendTokensList } = useTokens();
+
+  const allTokensList = useMemo(() => {
+    const defaultTokens: TokenInfo[] = [
+      { symbol: "MST", name: "tMST Native Token", decimals: 18 }
+    ];
+
+    if (backendTokensList && backendTokensList.length > 0) {
+      const backendTokensMapped = backendTokensList.map((t: any) => ({
+        symbol: t.symbol,
+        name: t.symbol === "USDC" ? "USD Coin" : (t.symbol === "WMST" ? "Wrapped MST" : t.symbol + " Token"),
+        decimals: t.decimals
+      }));
+
+      const merged = [...defaultTokens];
+      backendTokensMapped.forEach((bt) => {
+        if (!merged.find((m) => m.symbol.toLowerCase() === bt.symbol.toLowerCase())) {
+          merged.push(bt);
+        }
+      });
+      return merged;
+    }
+
+    return [
+      { symbol: "MST", name: "tMST Native Token", decimals: 18 },
+      ...TOKENS.map((t) => ({
+        symbol: t.symbol,
+        name: t.name,
+        decimals: t.decimals
+      }))
+    ];
+  }, [backendTokensList]);
 
   const popularTokens = useMemo(() => {
     if (excludeTokens && excludeTokens.length > 0) {
@@ -70,7 +94,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
 
   // Filter tokens
   const filteredTokens = useMemo(() => {
-    let tokens = ALL_TOKENS;
+    let tokens = allTokensList;
     if (excludeTokens && excludeTokens.length > 0) {
       tokens = tokens.filter((token) => !excludeTokens.includes(token.symbol));
     }
@@ -81,7 +105,7 @@ export const MstTokenModal: React.FC<MstTokenModalProps> = ({
         token.symbol.toLowerCase().includes(query) ||
         token.name.toLowerCase().includes(query)
     );
-  }, [searchQuery, excludeTokens]);
+  }, [searchQuery, excludeTokens, allTokensList]);
 
   const isDark = theme === "dark";
 

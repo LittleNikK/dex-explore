@@ -13,6 +13,7 @@ import { getAmountsForLiquidity, getOtherAmountForToken, tickToPrice, priceToTic
 import { poolService } from "../services/pool.service";
 import { liquidityService } from "../services/liquidity.service";
 import { lpPositionService } from "../services/lp-position.service";
+import { useTokens } from "../hooks/api";
 
 export interface PositionItem {
   tokenId: bigint;
@@ -76,6 +77,7 @@ export default function LiquidityPage() {
   const { switchChainAsync } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
+  const { data: dbTokens } = useTokens();
 
   const [tokenA_Symbol, setTokenA_Symbol] = useState("");
   const [tokenB_Symbol, setTokenB_Symbol] = useState("");
@@ -97,8 +99,35 @@ export default function LiquidityPage() {
     }
   };
 
-  const wmstToken = useMemo(() => getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : (tokenA_Symbol === "WMST" ? CONTRACTS.wmst : undefined) }, [tokenA_Symbol]);
-  const usdcToken = useMemo(() => getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : (tokenB_Symbol === "WMST" ? CONTRACTS.wmst : undefined) }, [tokenB_Symbol]);
+  const wmstToken = useMemo(() => {
+    if (dbTokens && dbTokens.length > 0) {
+      const match = dbTokens.find(t => t.symbol.toLowerCase() === tokenA_Symbol.toLowerCase());
+      if (match) {
+        return {
+          symbol: match.symbol,
+          name: match.symbol === "USDC" ? "USD Coin" : (match.symbol === "WMST" ? "Wrapped MST" : match.symbol + " Token"),
+          decimals: match.decimals,
+          address: match.tokenAddress as Address
+        };
+      }
+    }
+    return getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : (tokenA_Symbol === "WMST" ? CONTRACTS.wmst : undefined) };
+  }, [tokenA_Symbol, dbTokens]);
+
+  const usdcToken = useMemo(() => {
+    if (dbTokens && dbTokens.length > 0) {
+      const match = dbTokens.find(t => t.symbol.toLowerCase() === tokenB_Symbol.toLowerCase());
+      if (match) {
+        return {
+          symbol: match.symbol,
+          name: match.symbol === "USDC" ? "USD Coin" : (match.symbol === "WMST" ? "Wrapped MST" : match.symbol + " Token"),
+          decimals: match.decimals,
+          address: match.tokenAddress as Address
+        };
+      }
+    }
+    return getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : (tokenB_Symbol === "WMST" ? CONTRACTS.wmst : undefined) };
+  }, [tokenB_Symbol, dbTokens]);
 
   // 1. Fetch live balances
   const [wmstBalance, setWmstBalance] = useState("0.00");
