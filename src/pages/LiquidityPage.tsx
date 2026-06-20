@@ -860,38 +860,16 @@ export default function LiquidityPage() {
   const fetchLPState = async () => {
     if (!publicClient || !address || !isConnected) return;
     try {
-      const npmBalance = await publicClient.readContract({
-        address: CONTRACTS.positionManager,
-        abi: nonfungiblePositionManagerAbi,
-        functionName: "balanceOf",
-        args: [address]
-      }) as bigint;
+      const backendPositions = await lpPositionService.getWalletPositions(address);
 
-      if (npmBalance === 0n) {
+      if (!backendPositions || backendPositions.length === 0) {
         setPositions([]);
         return;
       }
 
-      const indices = Array.from({ length: Number(npmBalance) }, (_, i) => BigInt(i));
-
-      const tokenIds = await mapWithLimit(indices, 3, async (i) => {
+      const tempPositionsRaw = await mapWithLimit(backendPositions, 3, async (dbPos) => {
         try {
-          return await publicClient.readContract({
-            address: CONTRACTS.positionManager,
-            abi: nonfungiblePositionManagerAbi,
-            functionName: "tokenOfOwnerByIndex",
-            args: [address, i]
-          }) as bigint;
-        } catch (err) {
-          console.error(`Error fetching tokenId at index ${i}:`, err);
-          return null;
-        }
-      });
-
-      const validTokenIds = tokenIds.filter((id): id is bigint => id !== null);
-
-      const tempPositionsRaw = await mapWithLimit(validTokenIds, 3, async (tokenId) => {
-        try {
+          const tokenId = BigInt(dbPos.tokenId);
           const positionInfo = await publicClient.readContract({
             address: CONTRACTS.positionManager,
             abi: nonfungiblePositionManagerAbi,
@@ -899,11 +877,11 @@ export default function LiquidityPage() {
             args: [tokenId]
           }) as any;
 
-          const token0 = positionInfo[2] as Address;
-          const token1 = positionInfo[3] as Address;
-          const fee = positionInfo[4] as number;
-          const tickLower = positionInfo[5] as number;
-          const tickUpper = positionInfo[6] as number;
+          const token0 = dbPos.token0 as Address;
+          const token1 = dbPos.token1 as Address;
+          const fee = Number(dbPos.fee || 3000);
+          const tickLower = Number(dbPos.tickLower);
+          const tickUpper = Number(dbPos.tickUpper);
           const liquidity = positionInfo[7] as bigint;
           let owed0 = positionInfo[10] as bigint;
           let owed1 = positionInfo[11] as bigint;
@@ -954,8 +932,6 @@ export default function LiquidityPage() {
             console.warn(`[Fee Estimation] Failed reading collect to fetch real-time fees for Token ID #${tokenId}:`, simErr);
           }
 
-
-
           const t0Lower = token0.toLowerCase();
           const t1Lower = token1.toLowerCase();
           const wmstLower = CONTRACTS.wmst.toLowerCase();
@@ -969,21 +945,10 @@ export default function LiquidityPage() {
             return null; // Skip positions from old address config
           }
 
-          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "USDC", name: "USD Coin", decimals: 18, address: token0 };
-          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: token1 };
+          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: dbPos.token0Symbol || "USDC", name: dbPos.token0Symbol || "USD Coin", decimals: 18, address: token0 };
+          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: dbPos.token1Symbol || "WMST", name: dbPos.token1Symbol || "Wrapped MST", decimals: 18, address: token1 };
 
-          const cacheKey = `${token0.toLowerCase()}-${token1.toLowerCase()}-${fee}`;
-          let poolAddr = poolAddressCache.get(cacheKey);
-          if (!poolAddr) {
-            poolAddr = await publicClient.readContract({
-              address: CONTRACTS.factory,
-              abi: uniswapV3FactoryAbi,
-              functionName: "getPool",
-              args: [token0, token1, fee]
-            }) as string;
-            if (poolAddr) poolAddressCache.set(cacheKey, poolAddr);
-          }
-
+          const poolAddr = dbPos.poolAddress;
           let isInRange = false;
           let poolSqrtPriceX96 = 0n;
           let amount0 = 0n;
@@ -1036,7 +1001,7 @@ export default function LiquidityPage() {
             poolSqrtPriceX96
           };
         } catch (err) {
-          console.error(`Error querying details for tokenId ${tokenId}`, err);
+          console.error(`Error querying details for tokenId ${dbPos.tokenId}`, err);
           return null;
         }
       });
