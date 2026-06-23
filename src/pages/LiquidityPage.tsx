@@ -14,6 +14,8 @@ import { poolService } from "../services/pool.service";
 import { liquidityService } from "../services/liquidity.service";
 import { lpPositionService } from "../services/lp-position.service";
 import { useTokens } from "../hooks/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePortfolioStore } from "../features/portfolio/store/portfolio-store";
 
 export interface PositionItem {
   tokenId: bigint;
@@ -78,6 +80,7 @@ export default function LiquidityPage() {
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
   const { data: dbTokens } = useTokens();
+  const queryClient = useQueryClient();
 
   const [tokenA_Symbol, setTokenA_Symbol] = useState("");
   const [tokenB_Symbol, setTokenB_Symbol] = useState("");
@@ -144,6 +147,8 @@ export default function LiquidityPage() {
   // LP State Stored Values (List-based)
   const [positions, setPositions] = useState<PositionItem[] | null>(null);
   const [expandedTokenId, setExpandedTokenId] = useState<bigint | null>(null);
+  const [feeFilter, setFeeFilter] = useState<number | "all">("all");
+  const [sortBy, setSortBy] = useState<"tokenId-desc" | "tokenId-asc" | "value-desc" | "value-asc" | "status">("tokenId-desc");
 
   // View state: 'list' dashboard vs 'create' pool creator wizard
   const [currentView, setCurrentView] = useState<"list" | "create">("list");
@@ -191,6 +196,37 @@ export default function LiquidityPage() {
       positionsCount: positions.length
     };
   }, [positions, liveMstPrice]);
+
+  const processedPositions = useMemo(() => {
+    if (!positions) return null;
+
+    // 1. Filter
+    let filtered = positions;
+    if (feeFilter !== "all") {
+      filtered = filtered.filter((pos) => pos.fee === feeFilter);
+    }
+
+    // 2. Sort
+    return [...filtered].sort((a, b) => {
+      if (sortBy === "tokenId-desc") {
+        return Number(b.tokenId - a.tokenId);
+      }
+      if (sortBy === "tokenId-asc") {
+        return Number(a.tokenId - b.tokenId);
+      }
+      if (sortBy === "value-desc" || sortBy === "value-asc") {
+        const valA = (Number(formatUnits(a.amount0, a.token0Info.decimals)) * getTokenPrice(a.token0Info.symbol)) +
+                     (Number(formatUnits(a.amount1, a.token1Info.decimals)) * getTokenPrice(a.token1Info.symbol));
+        const valB = (Number(formatUnits(b.amount0, b.token0Info.decimals)) * getTokenPrice(b.token0Info.symbol)) +
+                     (Number(formatUnits(b.amount1, b.token1Info.decimals)) * getTokenPrice(b.token1Info.symbol));
+        return sortBy === "value-desc" ? valB - valA : valA - valB;
+      }
+      if (sortBy === "status") {
+        return (a.isInRange ? 0 : 1) - (b.isInRange ? 0 : 1);
+      }
+      return 0;
+    });
+  }, [positions, feeFilter, sortBy, liveMstPrice]);
 
   // Input states for Creating / Initializing Pool
   const [initFee, setInitFee] = useState<number>(3000); // 0.3%
@@ -376,14 +412,7 @@ export default function LiquidityPage() {
       active = false;
     };
   }, [initUsdc, tokenA_Symbol, tokenB_Symbol, initFee, isPoolInitialized, publicClient]);
-  const [currency, setCurrency] = useState<"USD" | "INR">("INR");
-  const USD_TO_INR = 83.5;
-
   const formatCurrency = (valUSD: number) => {
-    if (currency === "INR") {
-      const valINR = valUSD * USD_TO_INR;
-      return `₹${valINR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    }
     return `$${valUSD.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
@@ -1113,11 +1142,19 @@ export default function LiquidityPage() {
   const handleToggleExpand = (tokenId: bigint) => {
     if (expandedTokenId === tokenId) {
       setExpandedTokenId(null);
+      setTokenA_Symbol("");
+      setTokenB_Symbol("");
     } else {
       setExpandedTokenId(tokenId);
       setAddAmount0("");
       setAddAmount1("");
       setRemovePercent(50);
+
+      const targetPos = positions?.find(p => p.tokenId === tokenId);
+      if (targetPos) {
+        setTokenA_Symbol(targetPos.token0Info.symbol);
+        setTokenB_Symbol(targetPos.token1Info.symbol);
+      }
     }
   };
 
@@ -1475,6 +1512,8 @@ export default function LiquidityPage() {
         setInitUsdc("");
         fetchLPState();
         fetchERC20Balances();
+        queryClient.invalidateQueries();
+        usePortfolioStore.getState().refreshPortfolio();
 
         // Auto close and go back to list
         setTimeout(() => {
@@ -1624,6 +1663,8 @@ export default function LiquidityPage() {
       setAddAmount1("");
       fetchLPState();
       fetchERC20Balances();
+      queryClient.invalidateQueries();
+      usePortfolioStore.getState().refreshPortfolio();
     } catch (err) {
       console.error(err);
       const msg = err instanceof Error ? err.message : "Failed to add liquidity.";
@@ -1761,6 +1802,8 @@ export default function LiquidityPage() {
       setStatusText("Liquidity successfully removed and tokens collected!");
       fetchLPState();
       fetchERC20Balances();
+      queryClient.invalidateQueries();
+      usePortfolioStore.getState().refreshPortfolio();
     } catch (err) {
       console.error(err);
       const msg = err instanceof Error ? err.message : "Failed to remove liquidity.";
@@ -1837,28 +1880,7 @@ export default function LiquidityPage() {
               </div>
 
               <div className="flex items-center gap-4">
-                {/* Currency Selector */}
-                <div className={`flex rounded-xl p-1 border backdrop-blur-md transition-all
-                  ${isDark ? "bg-[#131A2A]/40 border-[#2C364F]/30" : "bg-white border-zinc-200/80 shadow-sm"}`}>
-                  <button
-                    onClick={() => setCurrency("USD")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                      ${currency === "USD"
-                        ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-900 border border-zinc-200 shadow-sm"
-                        : "text-zinc-400 hover:text-zinc-200"}`}
-                  >
-                    USD ($)
-                  </button>
-                  <button
-                    onClick={() => setCurrency("INR")}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                      ${currency === "INR"
-                        ? isDark ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30" : "bg-zinc-100 text-zinc-900 border border-zinc-200 shadow-sm"
-                        : "text-zinc-400 hover:text-zinc-200"}`}
-                  >
-                    INR (₹)
-                  </button>
-                </div>
+
 
                 <motion.button
                   whileHover={{ scale: 1.02 }}
@@ -1938,6 +1960,64 @@ export default function LiquidityPage() {
             {/* Positions container */}
             <div className="space-y-4">
 
+              {/* Sort & Filter Toolbar */}
+              {positions && positions.length > 0 && (
+                <div className={`p-4 rounded-[24px] border backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-300
+                  ${isDark ? "bg-[#0b0b14]/50 border-zinc-800/40" : "bg-white/60 border-zinc-200/80 shadow-sm"}`}>
+                  
+                  {/* Fee Filter Buttons */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`text-xs font-bold uppercase tracking-wider mr-1 ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+                      Fee Tier:
+                    </span>
+                    {(["all", 500, 3000, 10000] as const).map((fee) => {
+                      const isActive = feeFilter === fee;
+                      const label = fee === "all" ? "All" : `${fee / 10000}%`;
+                      return (
+                        <button
+                          key={fee}
+                          onClick={() => setFeeFilter(fee)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200
+                            ${isActive
+                              ? isDark
+                                ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 shadow-md shadow-cyan-500/5"
+                                : "bg-zinc-100 text-zinc-900 border border-zinc-200 shadow-sm"
+                              : isDark
+                                ? "text-zinc-400 hover:text-zinc-200 bg-white/5 border border-transparent"
+                                : "text-zinc-600 hover:text-zinc-800 bg-zinc-50 border border-transparent"
+                            }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Sort Dropdown Selector */}
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold uppercase tracking-wider ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+                      Sort by:
+                    </span>
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value as any)}
+                      className={`text-xs font-bold rounded-xl px-3 py-1.5 border outline-none cursor-pointer transition-all duration-200
+                        ${isDark
+                          ? "bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-cyan-500/50"
+                          : "bg-white border-zinc-200 text-zinc-700 hover:border-zinc-300 focus:border-cyan-500/50 shadow-sm"
+                        }`}
+                    >
+                      <option value="tokenId-desc">Date Added (Newest)</option>
+                      <option value="tokenId-asc">Date Added (Oldest)</option>
+                      <option value="value-desc">Value (High to Low)</option>
+                      <option value="value-asc">Value (Low to High)</option>
+                      <option value="status">Status (In Range First)</option>
+                    </select>
+                  </div>
+
+                </div>
+              )}
+
               {positions === null ? (
                 // Pulse loading skeleton list
                 <div className="space-y-4">
@@ -2001,10 +2081,43 @@ export default function LiquidityPage() {
                     Deploy First Position
                   </motion.button>
                 </motion.div>
+              ) : processedPositions && processedPositions.length === 0 ? (
+                // Filtered empty state
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`p-12 rounded-[30px] border text-center flex flex-col items-center justify-center gap-4 shadow-xl backdrop-blur-2xl transition-all duration-300
+                    ${isDark
+                      ? "bg-[#0b0b14]/75 border-zinc-800/60 text-white"
+                      : "bg-white/80 border-zinc-200 text-zinc-950"
+                    }`}
+                  style={{
+                    boxShadow: isDark
+                      ? "inset 0 1px 1px rgba(255,255,255,0.06), 0 20px 40px rgba(0,0,0,0.8)"
+                      : "inset 0 1px 1px rgba(255,255,255,0.8), 0 20px 40px rgba(0,0,0,0.05)"
+                  }}
+                >
+                  <div className={`p-4 rounded-xl ${isDark ? "bg-zinc-800/40 text-zinc-400" : "bg-zinc-100 text-zinc-500"}`}>
+                    <Coins size={36} />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-lg">No positions matching this fee tier</h4>
+                    <p className={`text-sm ${isDark ? "text-zinc-400" : "text-zinc-505"}`}>
+                      Clear the fee tier filter or try another option.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setFeeFilter("all")}
+                    className={`py-2 px-4 rounded-xl font-bold text-xs transition-all mt-2
+                      ${isDark ? "bg-white/5 hover:bg-white/10 text-cyan-400 border border-cyan-500/20" : "bg-zinc-100 hover:bg-zinc-200 text-zinc-900"}`}
+                  >
+                    Clear Filter
+                  </button>
+                </motion.div>
               ) : (
                 // Position List Cards
                 <div className="space-y-4">
-                  {positions.map((pos) => {
+                  {processedPositions && processedPositions.map((pos) => {
                     const isExpanded = expandedTokenId === pos.tokenId;
                     const token0Symbol = pos.token0Info.symbol;
                     const token1Symbol = pos.token1Info.symbol;
@@ -2309,7 +2422,7 @@ export default function LiquidityPage() {
                                               ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
                                           />
                                         </div>
-                                        <span className="text-[11px] text-zinc-550 mt-1 block">Bal: {token0Symbol === "WMST" ? wmstBalance : usdcBalance}</span>
+                                        <span className="text-[11px] text-zinc-550 mt-1 block">Bal: {wmstBalance}</span>
                                         {addAmount0 !== "" && (Number(addAmount0) <= 0 || isNaN(Number(addAmount0))) && (
                                           <span className="text-[10px] text-red-500 mt-1 block font-semibold">
                                             Amount must be positive.
@@ -2352,7 +2465,7 @@ export default function LiquidityPage() {
                                               ${isDark ? "border-[#2C364F]/50 focus:border-cyan-500/50" : "border-zinc-300 focus:border-cyan-500"}`}
                                           />
                                         </div>
-                                        <span className="text-[11px] text-zinc-550 mt-1 block">Bal: {token1Symbol === "USDC" ? usdcBalance : wmstBalance}</span>
+                                        <span className="text-[11px] text-zinc-550 mt-1 block">Bal: {usdcBalance}</span>
                                         {addAmount1 !== "" && (Number(addAmount1) <= 0 || isNaN(Number(addAmount1))) && (
                                           <span className="text-[10px] text-red-500 mt-1 block font-semibold">
                                             Amount must be positive.

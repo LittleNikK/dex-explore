@@ -14,6 +14,8 @@ import { MstSwapSettings } from "./MstSwapSettings";
 import { useMagnetic } from "../../hooks/useMagnetic";
 import { NumberTicker } from "../ui/NumberTicker";
 import { usePriceWs } from "../../hooks/usePriceWs";
+import { useQueryClient } from "@tanstack/react-query";
+import { usePortfolioStore } from "../../features/portfolio/store/portfolio-store";
 
 // Token price provider without static fallbacks
 
@@ -181,6 +183,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   // WAGMI balance fetch
   const { data: nativeBalanceData, refetch: refetchNativeBalance } = useBalance({ address });
@@ -887,6 +890,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           });
           setAmountIn("");
           setAmountOut("");
+          queryClient.invalidateQueries();
+          usePortfolioStore.getState().refreshPortfolio();
         } else {
           setToast({
             open: true,
@@ -896,6 +901,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             txHash: hash
           });
           setRefreshTrigger((prev) => prev + 1);
+          queryClient.invalidateQueries();
+          usePortfolioStore.getState().refreshPortfolio();
         }
       }
 
@@ -922,6 +929,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           txHash: hash
         });
         setRefreshTrigger((prev) => prev + 1);
+        queryClient.invalidateQueries();
+        usePortfolioStore.getState().refreshPortfolio();
       }
 
       else if (activeStep.id === "swap") {
@@ -1174,6 +1183,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           setAmountIn("");
           setAmountOut("");
           setRefreshTrigger((prev) => prev + 1);
+          queryClient.invalidateQueries();
+          usePortfolioStore.getState().refreshPortfolio();
         } else {
           setStatusText("Swap successful! Unwrap required.");
           setToast({
@@ -1184,6 +1195,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             txHash: hash
           });
           setRefreshTrigger((prev) => prev + 1);
+          queryClient.invalidateQueries();
+          usePortfolioStore.getState().refreshPortfolio();
         }
       }
 
@@ -1221,6 +1234,8 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         setAmountIn("");
         setAmountOut("");
         setRefreshTrigger((prev) => prev + 1);
+        queryClient.invalidateQueries();
+        usePortfolioStore.getState().refreshPortfolio();
       }
 
       // Recheck steps to move to the next step

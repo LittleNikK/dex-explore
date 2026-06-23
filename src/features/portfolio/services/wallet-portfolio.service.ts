@@ -799,7 +799,7 @@ export async function getWalletPortfolioSnapshot({
   const sortedActivities = parsedActivities.sort((a, b) => b.timestamp - a.timestamp);
   const activity: PortfolioActivity[] = sortedActivities;
 
-  const isNativeBalance = true;
+  const isNativeBalance = false;
   const nativeSymbol = "USDC";
 
   const portfolio: Portfolio = {
@@ -807,7 +807,7 @@ export async function getWalletPortfolioSnapshot({
     portfolioName: "Connected Wallet",
     walletLabel: chainLabel(targetChainId),
     ensName: null,
-    valueUsd: usdcAmount,
+    valueUsd: totalValueUsd,
     change24h: 0,
     networkCount: assetsValueUsd > 0 ? 1 : 0,
     assetCount: withAllocation.length,
