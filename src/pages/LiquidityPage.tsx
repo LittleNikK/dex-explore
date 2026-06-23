@@ -25,7 +25,7 @@ export interface PositionItem {
   tickUpper: number;
   tokensOwed0: bigint;
   tokensOwed1: bigint;
-  poolAddress: string;
+  poolAddress: Address;
   amount0: bigint;
   amount1: bigint;
   isInRange: boolean;
@@ -100,33 +100,41 @@ export default function LiquidityPage() {
   };
 
   const wmstToken = useMemo(() => {
+    // Priority: hardcoded core tokens to ensure correct testnet balances
+    if (tokenA_Symbol === "USDC") return { symbol: "USDC", name: "USD Coin", decimals: 18, address: CONTRACTS.usdc };
+    if (tokenA_Symbol === "WMST") return { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: CONTRACTS.wmst };
+
     if (dbTokens && dbTokens.length > 0) {
       const match = dbTokens.find(t => t.symbol.toLowerCase() === tokenA_Symbol.toLowerCase());
       if (match) {
         return {
           symbol: match.symbol,
-          name: match.symbol === "USDC" ? "USD Coin" : (match.symbol === "WMST" ? "Wrapped MST" : match.symbol + " Token"),
+          name: match.symbol + " Token",
           decimals: match.decimals,
           address: match.tokenAddress as Address
         };
       }
     }
-    return getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: tokenA_Symbol === "USDC" ? CONTRACTS.usdc : (tokenA_Symbol === "WMST" ? CONTRACTS.wmst : undefined) };
+    return getToken(tokenA_Symbol) || { symbol: tokenA_Symbol, decimals: 18, address: undefined };
   }, [tokenA_Symbol, dbTokens]);
 
   const usdcToken = useMemo(() => {
+    // Priority: hardcoded core tokens to ensure correct testnet balances
+    if (tokenB_Symbol === "USDC") return { symbol: "USDC", name: "USD Coin", decimals: 18, address: CONTRACTS.usdc };
+    if (tokenB_Symbol === "WMST") return { symbol: "WMST", name: "Wrapped MST", decimals: 18, address: CONTRACTS.wmst };
+
     if (dbTokens && dbTokens.length > 0) {
       const match = dbTokens.find(t => t.symbol.toLowerCase() === tokenB_Symbol.toLowerCase());
       if (match) {
         return {
           symbol: match.symbol,
-          name: match.symbol === "USDC" ? "USD Coin" : (match.symbol === "WMST" ? "Wrapped MST" : match.symbol + " Token"),
+          name: match.symbol + " Token",
           decimals: match.decimals,
           address: match.tokenAddress as Address
         };
       }
     }
-    return getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: tokenB_Symbol === "USDC" ? CONTRACTS.usdc : (tokenB_Symbol === "WMST" ? CONTRACTS.wmst : undefined) };
+    return getToken(tokenB_Symbol) || { symbol: tokenB_Symbol, decimals: 18, address: undefined };
   }, [tokenB_Symbol, dbTokens]);
 
   // 1. Fetch live balances
@@ -860,16 +868,34 @@ export default function LiquidityPage() {
   const fetchLPState = async () => {
     if (!publicClient || !address || !isConnected) return;
     try {
-      const backendPositions = await lpPositionService.getWalletPositions(address);
+      const balance = await publicClient.readContract({
+        address: CONTRACTS.positionManager,
+        abi: nonfungiblePositionManagerAbi,
+        functionName: "balanceOf",
+        args: [address]
+      }) as bigint;
 
-      if (!backendPositions || backendPositions.length === 0) {
+      if (balance === 0n) {
         setPositions([]);
         return;
       }
 
-      const tempPositionsRaw = await mapWithLimit(backendPositions, 3, async (dbPos) => {
+      const tokenIdsRaw = await Promise.all(
+        Array.from({ length: Number(balance) }).map((_, i) =>
+          publicClient.readContract({
+            address: CONTRACTS.positionManager,
+            abi: nonfungiblePositionManagerAbi,
+            functionName: "tokenOfOwnerByIndex",
+            args: [address, BigInt(i)]
+          })
+        )
+      );
+
+      const dbPositionsMock = tokenIdsRaw.map(id => ({ tokenId: id as bigint }));
+
+      const tempPositionsRaw = await mapWithLimit(dbPositionsMock, 3, async (dbPos) => {
         try {
-          const tokenId = BigInt(dbPos.tokenId);
+          const tokenId = dbPos.tokenId;
           const positionInfo = await publicClient.readContract({
             address: CONTRACTS.positionManager,
             abi: nonfungiblePositionManagerAbi,
@@ -877,11 +903,11 @@ export default function LiquidityPage() {
             args: [tokenId]
           }) as any;
 
-          const token0 = dbPos.token0 as Address;
-          const token1 = dbPos.token1 as Address;
-          const fee = Number(dbPos.fee || 3000);
-          const tickLower = Number(dbPos.tickLower);
-          const tickUpper = Number(dbPos.tickUpper);
+          const token0 = positionInfo[2] as Address;
+          const token1 = positionInfo[3] as Address;
+          const fee = Number(positionInfo[4]);
+          const tickLower = Number(positionInfo[5]);
+          const tickUpper = Number(positionInfo[6]);
           const liquidity = positionInfo[7] as bigint;
           let owed0 = positionInfo[10] as bigint;
           let owed1 = positionInfo[11] as bigint;
@@ -945,10 +971,15 @@ export default function LiquidityPage() {
             return null; // Skip positions from old address config
           }
 
-          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: dbPos.token0Symbol || "USDC", name: dbPos.token0Symbol || "USD Coin", decimals: 18, address: token0 };
-          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: dbPos.token1Symbol || "WMST", name: dbPos.token1Symbol || "Wrapped MST", decimals: 18, address: token1 };
+          const t0Info = TOKENS.find((t) => t.address?.toLowerCase() === token0.toLowerCase()) || { symbol: "Token0", name: "Unknown Token", decimals: 18, address: token0 };
+          const t1Info = TOKENS.find((t) => t.address?.toLowerCase() === token1.toLowerCase()) || { symbol: "Token1", name: "Unknown Token", decimals: 18, address: token1 };
 
-          const poolAddr = dbPos.poolAddress;
+          const poolAddr = await publicClient.readContract({
+            address: CONTRACTS.factory,
+            abi: uniswapV3FactoryAbi,
+            functionName: "getPool",
+            args: [token0, token1, fee]
+          }) as Address;
           let isInRange = false;
           let poolSqrtPriceX96 = 0n;
           let amount0 = 0n;

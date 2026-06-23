@@ -28,7 +28,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
   const navigate = useNavigate();
 
   // WAGMI native balance retrieval (fetches actual tMST testnet balances)
-  const { data: nativeBalanceData } = useBalance({
+  const { data: nativeBalanceData, refetch: refetchNativeBalance } = useBalance({
     address: address,
   });
 
@@ -152,6 +152,8 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     setSlippage(bps);
   };
 
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
   // 1. Fetch live balances (native tMST vs ERC20 tokens)
   const [balanceIn, setBalanceIn] = useState("0.00");
   useEffect(() => {
@@ -161,8 +163,11 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
 
       // Case A: Fetch native MST (tMST) balance
       if (tokenIn === "MST") {
-        if (active && nativeBalanceData) {
-          setBalanceIn(Number(nativeBalanceData.formatted).toFixed(4));
+        if (active) {
+          const res = await refetchNativeBalance();
+          if (res.data) {
+            setBalanceIn(Number(res.data.formatted).toFixed(4));
+          }
         }
         return;
       }
@@ -189,7 +194,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
     return () => {
       active = false;
     };
-  }, [address, isConnected, tokenIn, inputToken, chainId, nativeBalanceData]);
+  }, [address, isConnected, tokenIn, inputToken, chainId, nativeBalanceData, refreshTrigger]);
 
   // 2. Query Concentrated Quotes in real time
   useEffect(() => {
@@ -385,6 +390,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         setStatusText("Swap confirmed!");
         setAmountIn("");
         setAmountOut("");
+        setRefreshTrigger(prev => prev + 1);
         return;
       }
 
@@ -411,6 +417,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         setStatusText("Swap confirmed!");
         setAmountIn("");
         setAmountOut("");
+        setRefreshTrigger(prev => prev + 1);
         return;
       }
 
@@ -481,6 +488,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         setStatusText("Swap confirmed!");
         setAmountIn("");
         setAmountOut("");
+        setRefreshTrigger(prev => prev + 1);
         return;
       }
 
@@ -547,6 +555,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
         setStatusText("Swap confirmed!");
         setAmountIn("");
         setAmountOut("");
+        setRefreshTrigger(prev => prev + 1);
         return;
       }
 
@@ -601,6 +610,7 @@ export const MstSwapCard: React.FC<MstSwapCardProps> = ({ theme }) => {
       setStatusText("Swap confirmed!");
       setAmountIn("");
       setAmountOut("");
+      setRefreshTrigger(prev => prev + 1);
     } catch (err) {
       console.error(err);
       const message = err instanceof Error ? err.message : "Swap failed.";

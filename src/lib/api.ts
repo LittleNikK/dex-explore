@@ -1,7 +1,7 @@
 import axios, { type AxiosResponse } from "axios";
 import { useToastStore } from "../store/toastStore";
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "https://dex-production-c023.up.railway.app";
 
 export const dexApi = axios.create({
   baseURL: API_BASE_URL,
@@ -15,6 +15,11 @@ export const dexApi = axios.create({
 const handleError = (error: any) => {
   let title = "API Error";
   let description = "An unexpected error occurred.";
+
+  // Skip toast for unimplemented endpoints
+  if (error.response?.status === 404 && error.config?.url?.includes("/lp-positions")) {
+    return Promise.reject(error);
+  }
 
   if (error.response) {
     // Server responded with non-2xx status

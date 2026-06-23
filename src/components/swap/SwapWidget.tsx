@@ -492,8 +492,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       if (!isConnected || !address || !publicClient) return;
 
       if (tokenIn === "MST") {
-        if (active && nativeBalanceData) {
-          setBalanceIn(Number(nativeBalanceData.formatted).toFixed(4));
+        if (active) {
+          const res = await refetchNativeBalance();
+          if (res.data) {
+            setBalanceIn(Number(res.data.formatted).toFixed(4));
+          }
         }
         return;
       }
@@ -527,8 +530,11 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
       if (!isConnected || !address || !publicClient) return;
 
       if (tokenOut === "MST") {
-        if (active && nativeBalanceData) {
-          setBalanceOut(Number(nativeBalanceData.formatted).toFixed(4));
+        if (active) {
+          const res = await refetchNativeBalance();
+          if (res.data) {
+            setBalanceOut(Number(res.data.formatted).toFixed(4));
+          }
         }
         return;
       }
@@ -1167,6 +1173,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
           });
           setAmountIn("");
           setAmountOut("");
+          setRefreshTrigger((prev) => prev + 1);
         } else {
           setStatusText("Swap successful! Unwrap required.");
           setToast({
@@ -1176,6 +1183,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
             description: `Swapped to WMST. Ready to unwrap back to native MST.`,
             txHash: hash
           });
+          setRefreshTrigger((prev) => prev + 1);
         }
       }
 
@@ -1212,6 +1220,7 @@ export function SwapWidget({ theme }: SwapWidgetProps) {
         });
         setAmountIn("");
         setAmountOut("");
+        setRefreshTrigger((prev) => prev + 1);
       }
 
       // Recheck steps to move to the next step

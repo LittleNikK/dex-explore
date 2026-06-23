@@ -13,17 +13,32 @@ export interface CreateLpPositionDto {
 
 export const lpPositionService = {
   syncPosition: async (data: CreateLpPositionDto): Promise<any> => {
-    const res = await dexApi.post("/lp-positions", data);
-    return res.data;
+    try {
+      const res = await dexApi.post("/lp-positions", data);
+      return res.data;
+    } catch (e) {
+      console.warn("Backend /lp-positions endpoint not implemented yet.");
+      return null;
+    }
   },
 
   getWalletPositions: async (address: string): Promise<any[]> => {
-    const res = await dexApi.get(`/lp-positions/wallet/${address.toLowerCase()}`);
-    return res.data;
+    try {
+      const res = await dexApi.get(`/lp-positions/wallet/${address.toLowerCase()}`);
+      return res.data;
+    } catch (e) {
+      console.warn("Backend /lp-positions endpoint not implemented yet.");
+      return [];
+    }
   },
 
   getPosition: async (tokenId: string): Promise<any> => {
-    const res = await dexApi.get(`/lp-positions/${tokenId}`);
-    return res.data;
+    try {
+      const res = await dexApi.get(`/lp-positions/${tokenId}`);
+      return res.data;
+    } catch (e) {
+      console.warn("Backend /lp-positions endpoint not implemented yet.");
+      return null;
+    }
   },
 };
